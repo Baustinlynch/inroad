@@ -1,0 +1,16 @@
+appId: au.ingo.inroad
+productName: Inroad
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.prettierrc,components.json,tsconfig*.json}'
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+dmg:
+  artifactName: ${name}-${version}.${ext}

@@ -1,0 +1,329 @@
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import { SidebarTrigger } from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
+import {
+  Check,
+  Clock,
+  PenLine,
+  ExternalLink,
+  FileText,
+  GitCompare,
+  History,
+  Inbox,
+  Loader2,
+  MessageSquare,
+  Paperclip,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { useMemo, useState, type ReactNode } from 'react'
+import { identity, type Prospect, type Version } from '../data'
+import { changeCount } from '../diff'
+import { htmlToText } from '../richtext'
+import { DiffText } from './DiffText'
+import { ButtonKeys, Hint } from './hint'
+import { RichEditor } from './RichEditor'
+import type { Tab } from './RightPanel'
+import { StatusBadge } from './status'
+
+interface Props {
+  prospect: Prospect
+  voiceName: string
+  queuePosition: number
+  attachments: string[]
+  showDiff: boolean
+  onToggleDiff: () => void
+  regenerating: boolean
+  onRegenerate: () => void
+  onRestoreVersion: (v: Version) => void
+  onDeleteVersion: (v: Version) => void
+  onChange: (patch: Partial<Prospect>) => void
+  onSave: () => void
+  onRetry: () => void
+  // Which right-panel tab is showing (null when the panel is closed).
+  panelTab: Tab | null
+  // False when the docked panel already shows its own Brief / Chat tabs.
+  showPanelButtons: boolean
+  pendingSuggestions: number
+  onPanel: (tab: Tab) => void
+}
+
+export function Editor(props: Props) {
+  const { prospect: p, queuePosition, attachments, showDiff, onToggleDiff, regenerating, onChange, onSave, onRetry } = props
+  const [newTo, setNewTo] = useState('')
+  const hasDraft = !!p.originalBody
+  const originalText = useMemo(() => htmlToText(p.originalBody), [p.originalBody])
+  const bodyText = useMemo(() => htmlToText(p.body), [p.body])
+  const changes = hasDraft ? changeCount(originalText, bodyText) : 0
+
+  const setBody = (body: string) =>
+    onChange({
+      body,
+      status: p.status === 'saved' ? 'saved' : body === p.originalBody ? 'drafted' : 'edited',
+    })
+
+  return (
+    <div className="@container flex h-full min-w-0 flex-col bg-background">
+      <header className="drag flex h-12 shrink-0 items-center gap-2 border-b px-3">
+        <Hint label="Toggle sidebar" keys="⌘ \">
+          <SidebarTrigger />
+        </Hint>
+        <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="truncate font-heading text-base font-semibold">{p.company}</h1>
+          {p.domain && (
+            <a href="#" className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground @lg:inline-flex">
+              {p.domain} <ExternalLink className="size-3" />
+            </a>
+          )}
+          <StatusBadge status={p.status} />
+        </div>
+        {props.showPanelButtons && (
+          <>
+            <Hint label="Brief" keys="⌘ ⇧ B">
+              <Button variant={props.panelTab === 'brief' ? 'secondary' : 'ghost'} size="sm" onClick={() => props.onPanel('brief')}>
+                <FileText /> <span className="@max-md:hidden">Brief</span>
+              </Button>
+            </Hint>
+            <Hint label="Chat with Claude" keys="⌘ /">
+              <Button variant={props.panelTab === 'chat' ? 'secondary' : 'ghost'} size="sm" onClick={() => props.onPanel('chat')}>
+                <MessageSquare /> <span className="@max-md:hidden">Chat</span>
+                {props.pendingSuggestions > 0 && <Badge className="h-4 min-w-4 bg-mark px-1 text-[10px] text-black">{props.pendingSuggestions}</Badge>}
+              </Button>
+            </Hint>
+          </>
+        )}
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-[720px] px-8 py-6 @max-xl:px-4">
+          {p.status === 'queued' && (
+            <Notice icon={<Clock />} title="Waiting in queue">
+              {queuePosition > 0 ? `${queuePosition} ahead. Research runs 3 at a time.` : 'Starting shortly.'}
+            </Notice>
+          )}
+          {p.status === 'researching' && <Researching prospect={p} />}
+          {p.status === 'failed' && (
+            <Notice icon={<Search />} title="Research needs a hand">
+              <p className="mb-3">{p.error}</p>
+              <div className="flex max-w-md gap-2">
+                <Input placeholder="quillstack.example" className="bg-background" />
+                <Button onClick={onRetry}>
+                  <RefreshCw /> Retry
+                </Button>
+              </div>
+            </Notice>
+          )}
+
+          {hasDraft && (
+            <>
+              <div className="text-sm">
+                <Field label="From">
+                  <span className="truncate text-muted-foreground">{identity}</span>
+                  <Badge variant="outline" className="ml-auto shrink-0 font-normal text-muted-foreground">
+                    <PenLine className="size-3" /> {props.voiceName}
+                  </Badge>
+                </Field>
+                <Field label="To">
+                  <div className="flex flex-1 flex-wrap items-center gap-1.5">
+                    {p.to.map((e) => (
+                      <Badge key={e} variant="secondary" className="gap-1 pr-1 font-normal">
+                        {e}
+                        <button
+                          onClick={() => onChange({ to: p.to.filter((x) => x !== e) })}
+                          className="rounded-sm opacity-60 hover:opacity-100"
+                          title="Remove"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    <input
+                      value={newTo}
+                      onChange={(e) => setNewTo(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newTo.trim()) {
+                          onChange({ to: [...p.to, newTo.trim()] })
+                          setNewTo('')
+                        }
+                      }}
+                      placeholder={p.to.length ? '' : 'Type an address, or press T to add the top suggestion'}
+                      className="min-w-40 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+                    />
+                  </div>
+                </Field>
+                <Field label="Subject">
+                  <input value={p.subject} onChange={(e) => onChange({ subject: e.target.value })} className="flex-1 bg-transparent font-medium outline-none" />
+                </Field>
+              </div>
+
+              {showDiff ? (
+                <div className="email-body py-5 whitespace-pre-wrap">
+                  <DiffText a={originalText} b={bodyText} />
+                </div>
+              ) : (
+                <div className={cn(regenerating && 'pointer-events-none animate-pulse opacity-40')}>
+                  <RichEditor key={p.id} value={p.body} onChange={setBody} />
+                </div>
+              )}
+
+              <Separator className="mt-6 mb-3" />
+              <div className="flex flex-wrap items-center gap-2">
+                {attachments.map((f) => (
+                  <Badge key={f} variant="outline" className="gap-1.5 font-normal">
+                    <Paperclip className="size-3" />
+                    {f}
+                  </Badge>
+                ))}
+                <span className="text-xs text-muted-foreground">
+                  {changes > 0
+                    ? `${changes} change${changes === 1 ? '' : 's'} from Claude’s draft. Saving teaches your voice profile from them.`
+                    : 'Claude’s draft, unedited.'}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {hasDraft && (
+        <footer className="flex h-12 shrink-0 items-center gap-1 border-t px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <HistoryMenu versions={p.versions.filter((v) => !v.deletedAt)} current={p.body} onRestore={props.onRestoreVersion} onDelete={props.onDeleteVersion} />
+            <Hint label="Write a fresh draft from the same brief" keys="⌘ R" side="top">
+              <Button variant="ghost" size="sm" onClick={props.onRegenerate} disabled={regenerating}>
+                <RefreshCw className={cn(regenerating && 'animate-spin')} />
+                <span className="@max-md:hidden">{regenerating ? 'Regenerating…' : 'Regenerate'}</span>
+              </Button>
+            </Hint>
+            <Hint label="Compare with Claude’s draft" keys="⌘ D" side="top">
+              <Button variant={showDiff ? 'secondary' : 'ghost'} size="sm" onClick={onToggleDiff} disabled={changes === 0}>
+                <GitCompare /> <span className="@max-md:hidden">Changes</span>
+                {changes > 0 && <span className="text-muted-foreground">{changes}</span>}
+              </Button>
+            </Hint>
+          </div>
+          <Button size="sm" onClick={onSave}>
+            {p.status === 'saved' ? <Check /> : <Inbox />}
+            {p.status === 'saved' ? 'Update draft' : 'Save to drafts'}
+            <ButtonKeys keys="⌘ ↵" primary className="@max-md:hidden" />
+          </Button>
+        </footer>
+      )}
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-9 items-center gap-3 border-b py-1">
+      <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+function Notice({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-3 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0">
+      {icon}
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 font-medium text-foreground">{title}</div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function Researching({ prospect: p }: { prospect: Prospect }) {
+  return (
+    <Notice icon={<Loader2 className="animate-spin" />} title="Researching">
+      <ol className="space-y-1">
+        {p.progress.map((step, i) => (
+          <li key={i} className={i === p.progress.length - 1 ? 'text-foreground' : ''}>
+            {step}
+          </li>
+        ))}
+      </ol>
+    </Notice>
+  )
+}
+
+function ago(at: number) {
+  const m = Math.round((Date.now() - at) / 60_000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`
+}
+
+function HistoryMenu({
+  versions,
+  current,
+  onRestore,
+  onDelete,
+}: {
+  versions: Version[]
+  current: string
+  onRestore: (v: Version) => void
+  onDelete: (v: Version) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm">
+          <History /> <span className="@max-md:hidden">History</span> <span className="text-muted-foreground">{versions.length}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-72">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Restore a version. ⌘Z undoes it.</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {[...versions].reverse().map((v) => {
+          const isCurrent = v.html === current
+          return (
+            <DropdownMenuItem key={v.id} disabled={isCurrent} onSelect={() => onRestore(v)}>
+              <span className={cn('size-1.5 shrink-0 rounded-full', v.by === 'claude' ? 'bg-primary' : 'bg-success')} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">{v.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {v.by === 'claude' ? 'Claude' : 'You'} · {ago(v.at)}
+                </span>
+              </span>
+              {isCurrent ? (
+                <span className="text-xs text-muted-foreground">Current</span>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="Delete this version"
+                  className="text-muted-foreground hover:text-destructive"
+                  // Don't also trigger the item's "restore".
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onDelete(v)
+                  }}
+                >
+                  <Trash2 />
+                </Button>
+              )}
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
