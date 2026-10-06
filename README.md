@@ -43,7 +43,7 @@ Run `Inroad-x.y.z-windows-setup.exe`. When SmartScreen says "Windows protected y
 
 Inroad walks you through this the first time you open it.
 
-- **Claude:** Inroad uses the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) with the Claude Code sign-in on your computer. If you haven't signed in yet, install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal and log in. Alternatively, add an Anthropic API key in Settings → Claude.
+- **Claude:** setup asks how to connect. Inroad uses the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so if you're logged in to Claude Code on your computer it uses those credentials. If you haven't signed in yet, install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal and log in. Or use an Anthropic API key instead (also in Settings → Claude).
 - **Mailbox:** in Settings → Mailbox, enter your IMAP details and an app password (most providers require one). Passwords and keys are stored in your system keychain.
 - **Event lookup:** "Find details" can search connectors on your Claude account (Slack, email, docs) as well as the web. It only uses tools that read; anything that sends or changes data is blocked.
 
@@ -76,3 +76,7 @@ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 GitHub Actions builds macOS, Windows and Linux and publishes the release.
+
+## License
+
+[GPL-3.0-or-later](LICENSE). You can use, change and share Inroad, but anything you distribute that's based on it must also be released under the GPL with its source code.

@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 import { ArrowLeft, ArrowRight, Check, CircleAlert, Loader2, Plus, Sparkles, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { PublicSettings } from '../../../shared/api'
+import icon from '../assets/icon.png'
+import { ClaudeSetupDialog } from './ClaudeSetupDialog'
 import { FolderFields, type FolderInfo } from './FolderFields'
 import { MailboxForm } from './settings/GeneralPages'
 
@@ -20,7 +22,8 @@ export interface OnboardingResult {
 
 const CAMPAIGN_IDEAS = ['Sponsors', 'Venues', 'Partners', 'Speakers', 'Judges']
 
-// First-run setup: the event, the first campaign, and how the user writes.
+// First-run setup: a welcome page and Claude connection, then the event, the
+// first campaign, how the user writes, and their mailbox.
 export function Onboarding({
   onFinish,
   onSkip,
@@ -33,6 +36,9 @@ export function Onboarding({
   onSettings: (s: PublicSettings) => void
 }) {
   const mailConnected = !!settings?.mail && !!settings.hasMailPassword
+  // A welcome page comes first; "Get started" asks how to connect Claude, then the steps begin.
+  const [welcome, setWelcome] = useState(true)
+  const [connecting, setConnecting] = useState(false)
   const [step, setStep] = useState(0)
   const [folder, setFolder] = useState<FolderInfo>({ name: '', notes: '' })
   const [campaign, setCampaign] = useState({ name: 'Sponsors', notes: '' })
@@ -206,28 +212,50 @@ export function Onboarding({
           Skip setup
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-xl flex-col px-6 pt-6 pb-10">
-          <div className="mb-6 flex gap-1.5" aria-label={`Step ${step + 1} of ${steps.length}`}>
-            {steps.map((_, i) => (
-              <span key={i} className={cn('h-1 flex-1 rounded-full', i <= step ? 'bg-primary' : 'bg-muted')} />
-            ))}
-          </div>
-          <h1 className="font-heading text-2xl font-semibold">{current.title}</h1>
-          <p className="mt-1 mb-6 text-muted-foreground">{current.description}</p>
-          {current.body}
-          <div className="mt-8 flex items-center gap-2">
-            {step > 0 && (
-              <Button variant="ghost" onClick={() => setStep(step - 1)}>
+      {welcome ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-16 text-center">
+          <img src={icon} alt="" width={112} height={112} className="mb-6 select-none" draggable={false} />
+          <h1 className="font-heading text-3xl font-semibold">Welcome to Inroad</h1>
+          <p className="mt-3 max-w-md text-balance text-muted-foreground">
+            Research and draft personalised outreach emails in bulk, in your own voice. Add the organisations you want to reach: Claude researches each one,
+            writes an email that sounds like you, and saves it to your Drafts folder for you to send.
+          </p>
+          <Button size="lg" className="mt-8" autoFocus onClick={() => setConnecting(true)}>
+            Get started <ArrowRight />
+          </Button>
+          <ClaudeSetupDialog
+            open={connecting}
+            onOpenChange={setConnecting}
+            settings={settings}
+            onSettings={onSettings}
+            onDone={() => {
+              setConnecting(false)
+              setWelcome(false)
+            }}
+          />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex max-w-xl flex-col px-6 pt-6 pb-10">
+            <div className="mb-6 flex gap-1.5" aria-label={`Step ${step + 1} of ${steps.length}`}>
+              {steps.map((_, i) => (
+                <span key={i} className={cn('h-1 flex-1 rounded-full', i <= step ? 'bg-primary' : 'bg-muted')} />
+              ))}
+            </div>
+            <h1 className="font-heading text-2xl font-semibold">{current.title}</h1>
+            <p className="mt-1 mb-6 text-muted-foreground">{current.description}</p>
+            {current.body}
+            <div className="mt-8 flex items-center gap-2">
+              <Button variant="ghost" onClick={() => (step > 0 ? setStep(step - 1) : setWelcome(true))}>
                 <ArrowLeft /> Back
               </Button>
-            )}
-            <Button className="ml-auto" disabled={!current.canContinue} onClick={() => (last ? finish() : setStep(step + 1))}>
-              {current.next ?? 'Continue'} {!last && <ArrowRight />}
-            </Button>
+              <Button className="ml-auto" disabled={!current.canContinue} onClick={() => (last ? finish() : setStep(step + 1))}>
+                {current.next ?? 'Continue'} {!last && <ArrowRight />}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

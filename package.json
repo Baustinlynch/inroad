@@ -62,6 +62,7 @@
   "description": "Research and draft personalised outreach emails, in your voice.",
   "main": "./out/main/index.js",
   "author": "Ingo Wolf",
+  "license": "GPL-3.0-or-later",
   "allowScripts": {
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true,
