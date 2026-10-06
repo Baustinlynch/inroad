@@ -1,4 +1,4 @@
-import { initialCampaigns, initialProspects, initialVoices, type Campaign, type Prospect, type Voice } from './data'
+import { firstRunCampaign, firstRunVoice, type Campaign, type Prospect, type Voice } from './data'
 
 // Everything worth keeping between launches. UI-only state (open panels,
 // filters, theme) lives elsewhere.
@@ -11,18 +11,31 @@ export interface SavedState {
   selectedId: string
 }
 
-export const demoState = (): SavedState => ({
-  version: 1,
-  prospects: initialProspects,
-  campaigns: initialCampaigns,
-  voices: initialVoices,
-  campaignId: 'sponsors',
-  selectedId: 'lumen',
-})
+function firstRun(): SavedState {
+  const voice = firstRunVoice()
+  const campaign = firstRunCampaign(voice.id)
+  return { version: 1, prospects: [], campaigns: [campaign], voices: [voice], campaignId: campaign.id, selectedId: '' }
+}
+
+// Claude work doesn't survive a restart: research that was running goes back
+// in the queue, and a chat reply that was being written is marked as cut off.
+function resume(state: SavedState): SavedState {
+  return {
+    ...state,
+    prospects: state.prospects.map((p) => ({
+      ...p,
+      status: p.status === 'researching' ? 'queued' : p.status,
+      chats: p.chats.map((c) => ({
+        ...c,
+        messages: c.messages.map((m) => (m.pending ? { ...m, pending: false, error: true, text: m.text || 'Interrupted when Inroad closed.' } : m)),
+      })),
+    })),
+  }
+}
 
 export async function loadSaved(): Promise<SavedState> {
   const saved = (await window.api?.store.load()) as SavedState | null | undefined
-  return saved?.version === 1 ? saved : demoState()
+  return saved?.version === 1 ? resume(saved) : firstRun()
 }
 
 // Debounced so typing in the editor doesn't write the file on every keystroke.

@@ -14,3 +14,6 @@ mac:
     - zip
 dmg:
   artifactName: ${name}-${version}.${ext}
+# The Agent SDK spawns a native Claude binary, which can't run from inside the asar archive.
+asarUnpack:
+  - node_modules/@anthropic-ai/claude-agent-sdk*/**

@@ -24,7 +24,9 @@ const MODEL = 'opus'
 type Emit = (p: ClaudeProgress) => void
 
 // Set once at startup (kept free of Electron imports so scripts can test this module).
-const config = { workspace: '', clientApp: 'inroad' }
+// executable: set in packaged builds, where the SDK's bundled binary is unpacked
+// next to the asar archive; otherwise the SDK finds it itself.
+const config: { workspace: string; clientApp: string; executable?: string } = { workspace: '', clientApp: 'inroad' }
 export function configureClaude(c: typeof config) {
   Object.assign(config, c)
   mkdirSync(c.workspace, { recursive: true })
@@ -37,6 +39,7 @@ function baseOptions(apiKey: string | undefined, opts: Partial<Options>): Option
   return {
     model: MODEL,
     cwd,
+    ...(config.executable ? { pathToClaudeCodeExecutable: config.executable } : {}),
     settingSources: [],
     persistSession: false,
     // Anything not explicitly allowed is denied, never prompted for.
@@ -217,7 +220,7 @@ export async function draft(apiKey: string | undefined, req: DraftRequest): Prom
 
 const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes and the user's voice.
 
-To change the email, call the propose_edit tool: quote the exact text to replace (copied verbatim from the email, long enough to be unique) and give the replacement. Each call becomes a suggestion the user can accept or reject, so prefer a few focused edits over rewriting everything, and stay in the user's voice. Use WebSearch only if the user asks for something the brief doesn't cover. Keep your messages short.`
+To change the email, call the propose_edit tool: quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Each call becomes a suggestion the user can accept or reject, so prefer a few focused edits over rewriting everything, and stay in the user's voice. Use WebSearch only if the user asks for something the brief doesn't cover. Keep your messages short.`
 
 export async function chat(apiKey: string | undefined, req: ChatRequest, emit: Emit): Promise<Result<ChatResult>> {
   return guard(async () => {
@@ -229,7 +232,7 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
       'Suggest replacing a passage of the email. The user sees it as an accept/reject card.',
       {
         old: z.string().min(1).describe('Exact text currently in the email, copied verbatim.'),
-        new: z.string().describe('Replacement text.'),
+        new: z.string().min(1).describe('Replacement text.'),
         reason: z.string().describe('A few words on why, shown to the user.'),
       },
       async (edit) => {
@@ -269,14 +272,22 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
         includePartialMessages: true,
       }),
       (m) => {
-        // Stream Claude's reply text into the chat as it's written.
-        if (m.type === 'stream_event' && m.event.type === 'content_block_delta' && m.event.delta.type === 'text_delta') {
-          text += m.event.delta.text
-          emit({ jobId: req.jobId, kind: 'delta', text: m.event.delta.text })
-        }
+        // Stream Claude's reply text into the chat as it's written. Text
+        // either side of a tool call arrives as separate blocks.
+        if (m.type !== 'stream_event') return
+        const e = m.event
+        const chunk =
+          e.type === 'content_block_start' && e.content_block.type === 'text' && text
+            ? '\n\n'
+            : e.type === 'content_block_delta' && e.delta.type === 'text_delta'
+              ? e.delta.text
+              : ''
+        if (!chunk) return
+        text += chunk
+        emit({ jobId: req.jobId, kind: 'delta', text: chunk })
       },
     )
-    return { text: (result.result || text).trim(), proposals }
+    return { text: text.trim() || result.result.trim(), proposals }
   })
 }
 

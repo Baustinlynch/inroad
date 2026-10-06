@@ -33,3 +33,13 @@ export function htmlToText(html: string): string {
   })
   return blocks.join('\n\n')
 }
+
+// Claude quotes the email as plain text (see htmlToText), so suggested edits
+// are matched against the HTML by escaping them the same way the editor does.
+// Text that spans formatting (e.g. half a bold phrase) won't match; callers
+// treat that as "the text has changed".
+const asHtml = (text: string) => escape(text).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')
+
+export const htmlHasText = (html: string, text: string) => html.includes(asHtml(text))
+
+export const replaceText = (html: string, from: string, to: string) => html.replace(asHtml(from), () => asHtml(to))

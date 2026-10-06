@@ -50,7 +50,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  claude.configureClaude({ workspace: join(app.getPath('userData'), 'agent-workspace'), clientApp: `inroad/${app.getVersion()}` })
+  claude.configureClaude({
+    workspace: join(app.getPath('userData'), 'agent-workspace'),
+    clientApp: `inroad/${app.getVersion()}`,
+    // Packaged: a binary inside app.asar can't be spawned, so point at the unpacked copy (see asarUnpack).
+    executable: app.isPackaged
+      ? join(
+          process.resourcesPath,
+          'app.asar.unpacked/node_modules/@anthropic-ai',
+          `claude-agent-sdk-${process.platform}-${process.arch}`,
+          process.platform === 'win32' ? 'claude.exe' : 'claude',
+        )
+      : undefined,
+  })
   electronApp.setAppUserModelId('au.ingo.inroad')
   // Dev: F12 toggles devtools; prod: disables reload shortcuts.
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))

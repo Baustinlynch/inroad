@@ -30,7 +30,7 @@ import {
   X,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
-import { identity, type Prospect, type Version } from '../data'
+import type { Prospect, Version } from '../data'
 import { changeCount } from '../diff'
 import { htmlToText } from '../richtext'
 import { DiffText } from './DiffText'
@@ -41,6 +41,8 @@ import { StatusBadge } from './status'
 
 interface Props {
   prospect: Prospect
+  // "Name <address>" from the mailbox settings, or '' before they're set up.
+  from: string
   voiceName: string
   queuePosition: number
   attachments: string[]
@@ -52,7 +54,7 @@ interface Props {
   onDeleteVersion: (v: Version) => void
   onChange: (patch: Partial<Prospect>) => void
   onSave: () => void
-  onRetry: () => void
+  onRetry: (website: string) => void
   // Which right-panel tab is showing (null when the panel is closed).
   panelTab: Tab | null
   // False when the docked panel already shows its own Brief / Chat tabs.
@@ -64,6 +66,7 @@ interface Props {
 export function Editor(props: Props) {
   const { prospect: p, queuePosition, attachments, showDiff, onToggleDiff, regenerating, onChange, onSave, onRetry } = props
   const [newTo, setNewTo] = useState('')
+  const [website, setWebsite] = useState('')
   const hasDraft = !!p.originalBody
   const originalText = useMemo(() => htmlToText(p.originalBody), [p.originalBody])
   const bodyText = useMemo(() => htmlToText(p.body), [p.body])
@@ -85,7 +88,11 @@ export function Editor(props: Props) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <h1 className="truncate font-heading text-base font-semibold">{p.company}</h1>
           {p.domain && (
-            <a href="#" className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground @lg:inline-flex">
+            <a
+              href={/^https?:\/\//.test(p.domain) ? p.domain : `https://${p.domain}`}
+              target="_blank"
+              rel="noreferrer"
+              className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground @lg:inline-flex">
               {p.domain} <ExternalLink className="size-3" />
             </a>
           )}
@@ -117,14 +124,27 @@ export function Editor(props: Props) {
           )}
           {p.status === 'researching' && <Researching prospect={p} />}
           {p.status === 'failed' && (
-            <Notice icon={<Search />} title="Research needs a hand">
+            <Notice icon={<Search />} title="Research didn’t finish">
               <p className="mb-3">{p.error}</p>
-              <div className="flex max-w-md gap-2">
-                <Input placeholder="quillstack.example" className="bg-background" />
-                <Button onClick={onRetry}>
+              <form
+                className="flex max-w-md gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  onRetry(website.trim())
+                  setWebsite('')
+                }}
+              >
+                <Input
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  placeholder={p.domain || 'Their website (optional)'}
+                  aria-label="Website"
+                  className="bg-background"
+                />
+                <Button type="submit">
                   <RefreshCw /> Retry
                 </Button>
-              </div>
+              </form>
             </Notice>
           )}
 
@@ -132,7 +152,7 @@ export function Editor(props: Props) {
             <>
               <div className="text-sm">
                 <Field label="From">
-                  <span className="truncate text-muted-foreground">{identity}</span>
+                  <span className="truncate text-muted-foreground">{props.from || 'Set up your mailbox in Settings'}</span>
                   <Badge variant="outline" className="ml-auto shrink-0 font-normal text-muted-foreground">
                     <PenLine className="size-3" /> {props.voiceName}
                   </Badge>

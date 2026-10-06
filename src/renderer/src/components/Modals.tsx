@@ -21,16 +21,20 @@ export function AddCompaniesDialog({
   onOpenChange: (o: boolean) => void
   campaign: Campaign
   voiceName: string
-  onAdd: (names: string[]) => void
+  onAdd: (orgs: { company: string; website: string }[]) => void
 }) {
   const [text, setText] = useState('')
-  const names = text
+  const orgs = text
     .split('\n')
-    .map((s) => s.split(',')[0].trim())
-    .filter(Boolean)
+    .map((line) => {
+      const [company, website = ''] = line.split(',').map((s) => s.trim())
+      return { company, website }
+    })
+    .filter((o) => o.company)
+  const names = orgs.map((o) => o.company)
   const submit = () => {
-    if (!names.length) return
-    onAdd(names)
+    if (!orgs.length) return
+    onAdd(orgs)
     setText('')
   }
   return (

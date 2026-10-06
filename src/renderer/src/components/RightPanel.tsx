@@ -5,7 +5,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { ArrowUp, Check, ChevronsUpDown, ExternalLink, FileText, Link2, MessageSquare, MessageSquarePlus, Sparkles, Trash2, Undo2, UserPlus, X } from 'lucide-react'
+import Markdown from 'react-markdown'
+import { ArrowUp, Check, ChevronsUpDown, CircleAlert, ExternalLink, FileText, Link2, Loader2, MessageSquare, MessageSquarePlus, Sparkles, Trash2, Undo2, UserPlus, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   DropdownMenu,
@@ -87,10 +88,18 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 function BriefView({ prospect: p, onAddRecipient }: { prospect: Prospect; onAddRecipient: (e: string) => void }) {
   const b = p.brief
+  // Sources come from the model, so don't trust them to be valid URLs.
+  const hostname = (url: string) => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '')
+    } catch {
+      return ''
+    }
+  }
   if (!b) return <p className="p-4 text-sm text-muted-foreground">The brief appears here once {p.company} has been researched.</p>
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
+    <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
       <div className="space-y-5 p-4 text-sm">
         <Section title="Summary">
           <p className="leading-relaxed">{b.summary}</p>
@@ -119,9 +128,9 @@ function BriefView({ prospect: p, onAddRecipient }: { prospect: Prospect; onAddR
             {b.sources.map((s, i) => (
               <li key={s.url} className="flex gap-2">
                 <span className="text-muted-foreground">{i + 1}.</span>
-                <a href="#" className="flex min-w-0 flex-1 items-center gap-1.5 hover:underline">
+                <a href={s.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center gap-1.5 hover:underline">
                   <span className="truncate">{s.title}</span>
-                  <span className="shrink-0 text-muted-foreground">{new URL(s.url).hostname}</span>
+                  <span className="shrink-0 text-muted-foreground">{hostname(s.url)}</span>
                   <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
                 </a>
               </li>
@@ -139,17 +148,17 @@ function RecipientCard({ r, added, onAdd }: { r: Recipient; added: boolean; onAd
     <Card size="sm" className="gap-1 py-2.5">
       <CardContent className="flex items-start gap-3 text-sm">
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="font-medium">{r.name}</span>
-            <span className="truncate text-xs text-muted-foreground">{r.role}</span>
-          </div>
-          {r.email && <div className="truncate text-xs">{r.email}</div>}
+          <div className="font-medium">{r.name}</div>
+          {r.role && <div className="line-clamp-2 text-xs text-muted-foreground">{r.role}</div>}
+          {r.email && <div className="mt-0.5 truncate text-xs">{r.email}</div>}
           <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
             <Badge variant={r.confidence === 'low' ? 'destructive' : r.confidence === 'high' ? 'secondary' : 'outline'} className="font-normal">
               {confidence}
             </Badge>
             <Link2 className="size-3 shrink-0" />
-            <span className="truncate">{r.source}</span>
+            <span className="truncate" title={r.source}>
+              {r.source}
+            </span>
           </div>
         </div>
         {r.email ? (
@@ -173,13 +182,14 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
   const messages = thread?.messages ?? []
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, thread?.id])
+  }, [messages.length, messages.at(-1)?.text.length, thread?.id])
   // The suggestion ⌘⇧↵ / ⌘⇧⌫ act on: the first one still pending in this chat.
   const nextId = messages.flatMap((m) => m.proposals ?? []).find((x) => x.state === 'pending')?.id
   const ready = !!p.originalBody
+  const replying = messages.some((m) => m.pending)
 
   const send = () => {
-    if (!draft.trim() || !ready) return
+    if (!draft.trim() || !ready || replying) return
     onSend(draft.trim())
     setDraft('')
   }
@@ -223,7 +233,7 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
           </Hint>
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
         <div className="space-y-4 p-4 text-sm">
           {!ready && messages.length === 0 && <p className="text-muted-foreground">You can chat with Claude about {p.company} once its draft is ready.</p>}
           {ready && messages.length === 0 && (
@@ -246,7 +256,19 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
               </div>
             ) : (
               <div key={m.id} className="space-y-2">
-                <p className="leading-relaxed">{m.text}</p>
+                {m.pending && !m.text ? (
+                  <p className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Thinking…
+                  </p>
+                ) : m.error ? (
+                  <p className="flex items-start gap-2 text-destructive">
+                    <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> {m.text}
+                  </p>
+                ) : (
+                  <div className="chat-md leading-relaxed">
+                    <Markdown components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{m.text}</Markdown>
+                  </div>
+                )}
                 {m.proposals?.map((pr, i) => {
                   const isNext = pr.id === nextId
                   return (
@@ -309,11 +331,11 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
             placeholder={ready ? `Tell Claude what to change in the ${p.company} email…` : 'Waiting for the draft…'}
             className="max-h-40 min-h-16 resize-none bg-background pr-10"
           />
-          <Button size="icon-xs" onClick={send} disabled={!draft.trim() || !ready} className="absolute right-2 bottom-2" title="Send (↵)">
+          <Button size="icon-xs" onClick={send} disabled={!draft.trim() || !ready || replying} className="absolute right-2 bottom-2" title="Send (↵)">
             <ArrowUp />
           </Button>
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">Claude sees the email, the brief and your voice.</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">{replying ? 'Claude is replying…' : 'Claude sees the email, the brief and your voice.'}</p>
       </div>
     </>
   )

@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Check, CircleAlert, KeyRound, Loader2, Mail } from 'lucide-react'
@@ -49,6 +50,8 @@ export function SettingsDialog({
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [claudeTest, setClaudeTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [testingClaude, setTestingClaude] = useState(false)
 
   // Start from what's saved each time the dialog opens; secrets are never sent back.
   useEffect(() => {
@@ -60,6 +63,7 @@ export function SettingsDialog({
     setPassword('')
     setApiKey('')
     setTest(null)
+    setClaudeTest(null)
   }, [open, settings])
 
   const pick = (p: Provider) => {
@@ -93,8 +97,23 @@ export function SettingsDialog({
     try {
       onSaved(await window.api.settings.set({ anthropicKey: apiKey }))
       setApiKey('')
+      setClaudeTest(null)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const testClaude = async () => {
+    if (!window.api) return
+    setTestingClaude(true)
+    setClaudeTest(null)
+    try {
+      const res = await window.api.claude.test()
+      setClaudeTest(
+        res.ok ? { ok: true, message: res.value.via === 'api-key' ? 'Connected with your API key.' : 'Connected with your Claude sign-in.' } : { ok: false, message: res.error },
+      )
+    } finally {
+      setTestingClaude(false)
     }
   }
 
@@ -115,7 +134,6 @@ export function SettingsDialog({
             </TabsTrigger>
             <TabsTrigger value="claude">
               <KeyRound /> Claude
-              {settings?.hasAnthropicKey && <Check className="text-success" />}
             </TabsTrigger>
           </TabsList>
 
@@ -203,14 +221,29 @@ export function SettingsDialog({
           </TabsContent>
 
           <TabsContent value="claude" className="mt-3 grid gap-3">
-            <p className="text-sm text-muted-foreground">Claude researches each organisation, drafts emails and powers the chat. You need an Anthropic API key.</p>
+            <p className="text-sm text-muted-foreground">
+              Claude researches each organisation, drafts emails and powers the chat. It uses the Claude Code sign-in on this computer, so it runs on your
+              Claude plan. Not signed in? Run <code className="rounded bg-muted px-1 py-0.5 text-xs">claude</code> in a terminal once and log in.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" disabled={!desktop || testingClaude} onClick={testClaude}>
+                {testingClaude && <Loader2 className="animate-spin" />} Test connection
+              </Button>
+              {claudeTest && (
+                <p className={`flex items-start gap-2 text-sm ${claudeTest.ok ? 'text-success' : 'text-destructive'}`}>
+                  {claudeTest.ok ? <Check className="mt-0.5 size-4 shrink-0" /> : <CircleAlert className="mt-0.5 size-4 shrink-0" />}
+                  {claudeTest.message}
+                </p>
+              )}
+            </div>
+            <Separator className="my-1" />
             <Field
-              label="Anthropic API key"
+              label="Anthropic API key (optional)"
               htmlFor="apiKey"
               hint={
                 <>
-                  Create one at{' '}
-                  <a href="https://console.anthropic.com/settings/keys" target="_blank" className="underline">
+                  Used instead of your sign-in, billed per token. Create one at{' '}
+                  <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="underline">
                     console.anthropic.com
                   </a>
                   .
@@ -228,12 +261,17 @@ export function SettingsDialog({
             </Field>
             {settings?.hasAnthropicKey && (
               <Badge variant="secondary" className="w-fit gap-1">
-                <Check className="text-success" /> Key saved
+                <Check className="text-success" /> Using your API key
               </Badge>
             )}
             <DialogFooter>
               {settings?.hasAnthropicKey && (
-                <Button variant="ghost" className="text-destructive" disabled={!desktop || busy} onClick={() => window.api?.settings.set({ anthropicKey: '' }).then(onSaved)}>
+                <Button
+                  variant="ghost"
+                  className="text-destructive"
+                  disabled={!desktop || busy}
+                  onClick={() => window.api?.settings.set({ anthropicKey: '' }).then((next) => (onSaved(next), setClaudeTest(null)))}
+                >
                   Remove key
                 </Button>
               )}

@@ -35,19 +35,10 @@ import { TrashView, type TrashItem } from './components/TrashView'
 import { AppSidebar, inFilter, type Filter } from './components/Sidebar'
 import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
-import {
-  fakeResult,
-  mockRegenerate,
-  nextStep,
-  RESEARCH_STEPS,
-  type Campaign,
-  type ChatThread,
-  type Prospect,
-  type Version,
-} from './data'
-import type { DraftRef, PublicSettings } from '../../shared/api'
+import { MAX_VOICE_EXAMPLES, type Campaign, type ChatMsg, type ChatThread, type Prospect, type Version, type Voice } from './data'
+import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
 import { persist, type SavedState } from './persist'
-import { htmlToText } from './richtext'
+import { htmlHasText, htmlToText, replaceText, textToHtml } from './richtext'
 import { SettingsDialog } from './components/SettingsDialog'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
 
@@ -58,6 +49,7 @@ const UNDO_GRACE_MS = 5000
 type Theme = 'dark' | 'light'
 
 const needsReview = (p: Prospect) => p.status === 'drafted' || p.status === 'edited'
+const hasText = (p: Prospect | undefined, text: string) => !!p && !!text && (p.subject.includes(text) || htmlHasText(p.body, text))
 const statusAfter = (p: Prospect, body: string): Prospect['status'] => (p.status === 'saved' ? 'saved' : body !== p.originalBody ? 'edited' : 'drafted')
 
 interface Toast {
@@ -65,6 +57,15 @@ interface Toast {
   undo?: boolean
   redo?: boolean
   action?: { label: string; run: () => void }
+}
+
+// What one save taught Claude about how you write, so it can be undone.
+interface VoiceChange {
+  voiceId: string
+  at: number
+  add: string[]
+  remove: string[]
+  example: { draft: string; final: string }
 }
 
 function loadTheme(): Theme {
@@ -149,22 +150,73 @@ export default function App({ saved }: { saved: SavedState }) {
     }
   }, [theme])
 
-  // Fake research runner: advances each researching prospect one step per tick
-  // and pulls from the queue so at most MAX_CONCURRENT run at once.
+  // ---- Claude ----
+  // Latest campaigns/voices/settings for async work that finishes later.
+  const campaignsRef = useRef(campaigns)
+  campaignsRef.current = campaigns
+  const voicesRef = useRef(voices)
+  voicesRef.current = voices
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+
+  // Streamed progress (research steps, chat text) is routed to whoever started the job.
+  const jobs = useRef(new Map<string, (e: ClaudeProgress) => void>())
+  useEffect(() => window.api?.claude.onProgress((e) => jobs.current.get(e.jobId)?.(e)), [])
+
+  const voiceOf = (campaignId: string): Voice => {
+    const vs = voicesRef.current.filter((v) => !v.deletedAt)
+    const c = campaignsRef.current.find((c) => c.id === campaignId)
+    return vs.find((v) => v.id === c?.voiceId) ?? vs[0]
+  }
+  const voiceInput = (v: Voice): VoiceInput => ({
+    name: v.name,
+    notes: v.notes.filter((n) => !n.deletedAt).map((n) => n.text),
+    examples: v.examples ?? [],
+  })
+  const claudeContext = (p: Prospect) => ({
+    company: p.company,
+    campaignNotes: campaignsRef.current.find((c) => c.id === p.campaignId)?.notes ?? '',
+    voice: voiceInput(voiceOf(p.campaignId)),
+    senderName: settingsRef.current?.mail?.fromName ?? '',
+  })
+
+  // Research runner: pulls from the queue so at most MAX_CONCURRENT run at once.
+  const researching = useRef(new Set<string>())
+  const research = async (p: Prospect) => {
+    const pid = p.id
+    researching.current.add(pid)
+    update(pid, (q) => ({ ...q, status: 'researching', progress: [], error: undefined }))
+    const jobId = crypto.randomUUID()
+    jobs.current.set(jobId, (e) => e.kind === 'step' && update(pid, (q) => ({ ...q, progress: [...q.progress, e.text] })))
+    const res = window.api
+      ? await window.api.claude.research({ jobId, website: p.domain || undefined, ...claudeContext(p) })
+      : ({ ok: false, error: 'Research runs in the Inroad desktop app.' } as const)
+    jobs.current.delete(jobId)
+    researching.current.delete(pid)
+    if (!res.ok) return update(pid, (q) => ({ ...q, status: 'failed', error: res.error }))
+    const { research, draft } = res.value
+    const html = textToHtml(draft.body)
+    update(pid, (q) => ({
+      ...q,
+      status: 'drafted',
+      research,
+      brief: draft.brief,
+      subject: draft.subject,
+      body: html,
+      originalBody: html,
+      to: draft.to ? [draft.to] : [],
+      versions: [...q.versions, { id: crypto.randomUUID(), label: 'Claude’s draft', by: 'claude', at: Date.now(), html }],
+    }))
+  }
   useEffect(() => {
-    const t = setInterval(() => {
-      setProspects((ps) => {
-        const advanced = ps.map((p) => {
-          if (p.status !== 'researching') return p
-          if (p.progress.length >= RESEARCH_STEPS) return fakeResult(p)
-          return { ...p, progress: [...p.progress, nextStep(p.company, p.progress.length)] }
-        })
-        let free = MAX_CONCURRENT - advanced.filter((p) => p.status === 'researching').length
-        return advanced.map((p) => (p.status === 'queued' && free-- > 0 ? { ...p, status: 'researching', progress: [] } : p))
-      })
-    }, 1800)
-    return () => clearInterval(t)
-  }, [])
+    let free = MAX_CONCURRENT - researching.current.size
+    for (const p of prospects) {
+      if (free <= 0) break
+      if (p.status !== 'queued' || p.deletedAt || researching.current.has(p.id)) continue
+      free--
+      void research(p)
+    }
+  })
 
   // One toast at a time (same id), with Undo / Redo where it applies.
   const undoRef = useRef<() => void>(() => {})
@@ -394,6 +446,38 @@ export default function App({ saved }: { saved: SavedState }) {
 
   const commitTimers = useRef<Record<string, number>>({})
 
+  // ---- Voice learning: what a save taught Claude about how you write ----
+  const applyVoiceChange = (c: VoiceChange, on: boolean) =>
+    setVoices((vs) =>
+      vs.map((v) => {
+        if (v.id !== c.voiceId) return v
+        const examples = v.examples ?? []
+        if (!on)
+          return {
+            ...v,
+            notes: v.notes.filter((n) => !(n.fresh && c.add.includes(n.text))).map((n) => (n.deletedAt === c.at ? { ...n, deletedAt: undefined } : n)),
+            examples: examples.filter((e) => e !== c.example),
+          }
+        return {
+          ...v,
+          // Contradicted notes go to Deleted items rather than vanishing.
+          notes: [...v.notes.map((n) => (!n.deletedAt && c.remove.includes(n.text) ? { ...n, deletedAt: c.at } : n)), ...c.add.map((text) => ({ text, fresh: true }))],
+          examples: [...examples, c.example].slice(-MAX_VOICE_EXAMPLES),
+        }
+      }),
+    )
+
+  // Compares Claude's draft with what you saved. The pair itself is kept as an
+  // example even if extracting notes fails.
+  const learnVoice = async (p: Prospect): Promise<VoiceChange> => {
+    const v = voiceOf(p.campaignId)
+    const example = { draft: htmlToText(p.originalBody), final: htmlToText(p.body) }
+    const base: VoiceChange = { voiceId: v.id, at: Date.now(), add: [], remove: [], example }
+    if (!window.api) return base
+    const res = await window.api.claude.learnVoice({ voiceName: v.name, notes: voiceInput(v).notes, ...example })
+    return res.ok ? { ...base, ...res.value } : base
+  }
+
   const mailReady = !window.api || (!!settings?.mail && settings.hasMailPassword)
 
   const save = () => {
@@ -405,6 +489,9 @@ export default function App({ saved }: { saved: SavedState }) {
     const versionId = crypto.randomUUID()
     // This save's trip to the mailbox, so undo knows whether to cancel it or delete the draft.
     const sync: { committed: boolean; ref?: DraftRef } = { committed: false }
+    // Voice learning runs alongside; undo rolls it back, redo re-applies it.
+    const learn: { started: boolean; active: boolean; change?: VoiceChange } = { started: false, active: false }
+    const snapshot = selected
 
     const commit = async () => {
       sync.committed = true
@@ -431,6 +518,23 @@ export default function App({ saved }: { saved: SavedState }) {
       sync.committed = false
       clearTimeout(commitTimers.current[pid])
       commitTimers.current[pid] = window.setTimeout(commit, UNDO_GRACE_MS)
+      if (!edited) return
+      learn.active = true
+      if (learn.change) return applyVoiceChange(learn.change, true)
+      if (learn.started) return
+      learn.started = true
+      void learnVoice(snapshot).then((change) => {
+        learn.change = change
+        if (!learn.active) return
+        applyVoiceChange(change, true)
+        const v = voicesRef.current.find((x) => x.id === change.voiceId)
+        const n = change.add.length + change.remove.length
+        if (n && v)
+          notify({
+            text: `Updated ${v.name}: ${[change.add.length && `${change.add.length} new note${change.add.length > 1 ? 's' : ''}`, change.remove.length && `${change.remove.length} removed`].filter(Boolean).join(', ')}`,
+            action: { label: 'View', run: () => setProfiles({ kind: 'voice', id: v.id }) },
+          })
+      })
     }
     apply()
     const next = nextReviewId(pid)
@@ -441,13 +545,15 @@ export default function App({ saved }: { saved: SavedState }) {
       pid,
       () => {
         update(pid, (p) => ({ ...p, status: prev, draftRef: prevRef, versions: p.versions.filter((v) => v.id !== versionId) }))
+        learn.active = false
+        if (learn.change) applyVoiceChange(learn.change, false)
         if (!sync.committed) {
           clearTimeout(commitTimers.current[pid])
           return `Cancelled saving ${company}. Nothing reached your mailbox.`
         }
         if (sync.ref && window.api)
           void window.api.mail.deleteDraft(sync.ref).then((r) => !r.ok && notify({ text: `Couldn’t remove the draft from your mailbox: ${r.error}` }))
-        return `Deleted ${company}'s draft from your mailbox${edited ? ' and rolled back the voice profile' : ''}`
+        return `Deleted ${company}'s draft from your mailbox${learn.change ? ' and rolled back the voice update' : ''}`
       },
       apply,
       `Saved ${company} to Drafts${nextName ? ` · now on ${nextName}` : ''}`,
@@ -455,43 +561,47 @@ export default function App({ saved }: { saved: SavedState }) {
     ;(document.activeElement as HTMLElement | null)?.blur()
   }
 
-  const regenerate = () => {
-    if (!selected?.originalBody || regeneratingId) return
-    const pid = selected.id
+  const regenerate = async () => {
+    if (!selected?.originalBody || regeneratingId || !window.api) return
+    const p = selected
+    const pid = p.id
+    // Drafts made before research notes were kept fall back to the brief.
+    const research = p.research ?? (p.brief ? JSON.stringify(p.brief) : '')
+    if (!research) return notify({ text: 'Nothing to redraft from yet. Retry the research first.' })
     setRegeneratingId(pid)
-    setTimeout(() => {
-      setRegeneratingId(null)
-      const p = get(pid)
-      if (!p) return
-      const html = mockRegenerate(p.originalBody, p.versions.filter((v) => v.by === 'claude').length)
-      const before = { body: p.body, originalBody: p.originalBody, status: p.status }
-      // Keep your edits in history so regenerating never loses work.
-      const added: Version[] = [
-        ...(p.versions.some((v) => v.html === p.body)
-          ? []
-          : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), html: p.body }]),
-        { id: crypto.randomUUID(), label: 'Regenerated draft', by: 'claude', at: Date.now(), html },
-      ]
-      const apply = () =>
-        update(pid, (q) => ({
-          ...q,
-          body: html,
-          originalBody: html,
-          status: q.status === 'saved' ? 'saved' : 'drafted',
-          versions: [...q.versions.filter((v) => !added.some((a) => a.id === v.id)), ...added],
-        }))
-      apply()
-      record(
-        'Regenerated draft',
-        pid,
-        () => {
-          update(pid, (q) => ({ ...q, ...before }))
-          return 'Back to your previous version. The regenerated one is still in History.'
-        },
-        apply,
-        'Regenerated draft · your previous version is in History',
-      )
-    }, 1200)
+    const res = await window.api.claude.draft({ ...claudeContext(p), research, previousDraft: `Subject: ${p.subject}\n\n${htmlToText(p.body)}` })
+    setRegeneratingId(null)
+    if (!res.ok) return notify({ text: `Couldn’t regenerate: ${res.error}` })
+    const q = get(pid)
+    if (!q) return
+    const html = textToHtml(res.value.body)
+    const subject = res.value.subject
+    const before = { body: q.body, originalBody: q.originalBody, subject: q.subject, status: q.status }
+    // Keep your edits in history so regenerating never loses work.
+    const added: Version[] = [
+      ...(q.versions.some((v) => v.html === q.body) ? [] : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), html: q.body }]),
+      { id: crypto.randomUUID(), label: 'Regenerated draft', by: 'claude', at: Date.now(), html },
+    ]
+    const apply = () =>
+      update(pid, (x) => ({
+        ...x,
+        body: html,
+        originalBody: html,
+        subject,
+        status: x.status === 'saved' ? 'saved' : 'drafted',
+        versions: [...x.versions.filter((v) => !added.some((a) => a.id === v.id)), ...added],
+      }))
+    apply()
+    record(
+      'Regenerated draft',
+      pid,
+      () => {
+        update(pid, (x) => ({ ...x, ...before }))
+        return 'Back to your previous version. The regenerated one is still in History.'
+      },
+      apply,
+      `Regenerated ${q.company} · your previous version is in History`,
+    )
   }
 
   const restoreVersion = (v: Version) => {
@@ -521,9 +631,11 @@ export default function App({ saved }: { saved: SavedState }) {
       })),
     }))
 
+  // Suggestions quote plain text from either the subject or the body.
   const swapText = (pid: string, from: string, to: string) =>
     update(pid, (p) => {
-      const body = p.body.replace(from, to)
+      if (p.subject.includes(from)) return { ...p, subject: p.subject.replace(from, () => to) }
+      const body = replaceText(p.body, from, to)
       return { ...p, body, status: statusAfter(p, body) }
     })
 
@@ -532,7 +644,7 @@ export default function App({ saved }: { saved: SavedState }) {
     const pid = selected.id
     const prop = findProposal(selected, msgId, propId)
     if (!prop) return
-    if (accept && !selected.body.includes(prop.old)) return notify({ text: "Couldn't apply: that text has changed since Claude suggested it" })
+    if (accept && !hasText(selected, prop.old)) return notify({ text: "Couldn't apply: that text has changed since Claude suggested it" })
     const apply = () => {
       if (accept) swapText(pid, prop.old, prop.new)
       setProposalState(pid, msgId, propId, accept ? 'accepted' : 'rejected')
@@ -545,7 +657,7 @@ export default function App({ saved }: { saved: SavedState }) {
         setProposalState(pid, msgId, propId, 'pending')
         if (!accept) return
         // Swap just that text back, so anything typed since survives.
-        if (!get(pid)?.body.includes(prop.new)) return 'Suggestion is back, but you’ve edited that text since, so the email was left as is'
+        if (!hasText(get(pid), prop.new)) return 'Suggestion is back, but you’ve edited that text since, so the email was left as is'
         swapText(pid, prop.new, prop.old)
       },
       apply,
@@ -610,7 +722,7 @@ export default function App({ saved }: { saved: SavedState }) {
     const prop = findProposal(selected, msgId, propId)
     if (!prop || prop.state === 'pending') return
     const prev = prop.state
-    if (prev === 'accepted' && !selected.body.includes(prop.new)) return notify({ text: 'Can’t undo that one: you’ve edited that text since' })
+    if (prev === 'accepted' && !hasText(selected, prop.new)) return notify({ text: 'Can’t undo that one: you’ve edited that text since' })
     const apply = () => {
       if (prev === 'accepted') swapText(pid, prop.new, prop.old)
       setProposalState(pid, msgId, propId, 'pending')
@@ -906,12 +1018,12 @@ export default function App({ saved }: { saved: SavedState }) {
 
   const queuePosition = prospects.filter((p) => p.status === 'queued').findIndex((p) => p.id === selectedId)
 
-  const addProspects = (names: string[]) => {
-    const added = names.map<Prospect>((company) => ({
+  const addProspects = (orgs: { company: string; website: string }[]) => {
+    const added = orgs.map<Prospect>(({ company, website }) => ({
       id: crypto.randomUUID(),
       campaignId,
       company,
-      domain: '',
+      domain: website,
       status: 'queued',
       progress: [],
       subject: '',
@@ -928,32 +1040,57 @@ export default function App({ saved }: { saved: SavedState }) {
     setAdding(false)
   }
 
-  const sendChat = (text: string) => {
+  // A suggestion as Claude will see it in the transcript of earlier turns.
+  const describe = (m: ChatMsg) =>
+    [m.text, ...(m.proposals ?? []).map((x) => `[Suggested replacing “${x.old}” with “${x.new}” — ${x.state === 'pending' ? 'not yet decided' : x.state}]`)].join('\n')
+
+  const sendChat = async (text: string) => {
     if (!selected) return
-    const id = selected.id
-    const current = activeChat(selected)
+    const p = selected
+    const pid = p.id
+    const current = activeChat(p)
+    if (current?.messages.some((m) => m.pending)) return
     // No chat yet: start one, named after the first message.
     const thread: ChatThread = current ?? { id: crypto.randomUUID(), title: text.slice(0, 40), createdAt: Date.now(), messages: [] }
     const chatId = thread.id
     const title = thread.messages.length ? thread.title : text.slice(0, 40)
-    const append = (msg: ChatThread['messages'][number]) =>
-      update(id, (p) => ({
-        ...p,
-        activeChatId: chatId,
-        chats: p.chats.some((c) => c.id === chatId)
-          ? p.chats.map((c) => (c.id === chatId ? { ...c, title: c.messages.length ? c.title : title, messages: [...c.messages, msg] } : c))
-          : [...p.chats, { ...thread, title, messages: [msg] }],
+    const history = thread.messages.filter((m) => !m.error).map((m) => ({ role: m.role, text: describe(m) }))
+    const replyId = crypto.randomUUID()
+    const userMsg: ChatMsg = { id: crypto.randomUUID(), role: 'user', text }
+    const reply: ChatMsg = { id: replyId, role: 'assistant', text: '', pending: true }
+    update(pid, (q) => ({
+      ...q,
+      activeChatId: chatId,
+      chats: q.chats.some((c) => c.id === chatId)
+        ? q.chats.map((c) => (c.id === chatId ? { ...c, title: c.messages.length ? c.title : title, messages: [...c.messages, userMsg, reply] } : c))
+        : [...q.chats, { ...thread, title, messages: [userMsg, reply] }],
+    }))
+    const setReply = (fn: (m: ChatMsg) => ChatMsg) =>
+      update(pid, (q) => ({
+        ...q,
+        chats: q.chats.map((c) => (c.id !== chatId ? c : { ...c, messages: c.messages.map((m) => (m.id === replyId ? fn(m) : m)) })),
       }))
-    append({ id: crypto.randomUUID(), role: 'user', text })
-    setTimeout(
-      () =>
-        append({
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          text: "(Mockup) Chat isn't wired up yet. In the real app Claude replies here and proposes edits you accept or reject.",
-        }),
-      800,
-    )
+    if (!window.api) return setReply((m) => ({ ...m, pending: false, error: true, text: 'Chat runs in the Inroad desktop app.' }))
+
+    const jobId = crypto.randomUUID()
+    jobs.current.set(jobId, (e) => e.kind === 'delta' && setReply((m) => ({ ...m, text: m.text + e.text })))
+    const res = await window.api.claude.chat({
+      jobId,
+      ...claudeContext(p),
+      brief: p.brief,
+      subject: p.subject,
+      body: htmlToText(p.body),
+      history,
+      message: text,
+    })
+    jobs.current.delete(jobId)
+    if (!res.ok) return setReply((m) => ({ ...m, pending: false, error: true, text: res.error }))
+    setReply((m) => ({
+      ...m,
+      pending: false,
+      text: res.value.text,
+      proposals: res.value.proposals.map((x) => ({ ...x, id: crypto.randomUUID(), state: 'pending' })),
+    }))
   }
 
   const panel = selected && (
@@ -977,6 +1114,7 @@ export default function App({ saved }: { saved: SavedState }) {
   ) : selected ? (
     <Editor
       prospect={selected}
+      from={settings?.mail?.fromEmail ? `${settings.mail.fromName ? `${settings.mail.fromName} ` : ''}<${settings.mail.fromEmail}>` : ''}
       voiceName={voice.name}
       attachments={campaign.attachments}
       queuePosition={queuePosition}
@@ -987,7 +1125,7 @@ export default function App({ saved }: { saved: SavedState }) {
       onRestoreVersion={restoreVersion}
       onDeleteVersion={deleteVersion}
       onChange={(patch) => (patch.to ? setRecipients(patch.to) : update(selected.id, (p) => ({ ...p, ...patch })))}
-      onRetry={() => update(selected.id, (p) => ({ ...p, status: 'researching', progress: [], error: undefined }))}
+      onRetry={(website) => update(selected.id, (p) => ({ ...p, status: 'queued', progress: [], error: undefined, domain: website || p.domain }))}
       onSave={save}
       panelTab={rightOpen ? tab : null}
       showPanelButtons={!(rightDocks && rightOpen)}
@@ -997,10 +1135,21 @@ export default function App({ saved }: { saved: SavedState }) {
   ) : (
     <div className="flex h-full flex-col items-start justify-center gap-3 px-10">
       <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
-      <p className="max-w-md text-muted-foreground">Add the organisations you want to reach. Claude researches each one and drafts an email.</p>
-      <Button onClick={() => setAdding(true)}>
-        <Plus /> Add to campaign
-      </Button>
+      <p className="max-w-md text-muted-foreground">
+        {campaign.notes.trim()
+          ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
+          : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
+      </p>
+      <div className="flex gap-2">
+        {!campaign.notes.trim() && (
+          <Button onClick={() => setProfiles({ kind: 'campaign', id: campaign.id })}>
+            <Flag /> Write campaign notes
+          </Button>
+        )}
+        <Button variant={campaign.notes.trim() ? 'default' : 'outline'} onClick={() => setAdding(true)}>
+          <Plus /> Add to campaign
+        </Button>
+      </div>
     </div>
   )
 

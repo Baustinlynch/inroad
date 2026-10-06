@@ -169,3 +169,31 @@
    when the sidebar is collapsed to icons, nudge the email header's content right. */
 [data-platform="darwin"] [data-slot="sidebar-header"] { padding-top: 2.5rem; }
 [data-platform="darwin"] [data-slot="sidebar"][data-state="collapsed"] ~ [data-slot="sidebar-inset"] header { padding-left: 2.75rem; }
+
+/* Claude's chat replies (markdown). */
+.chat-md > * + * {
+  margin-top: 0.5rem;
+}
+.chat-md ul {
+  list-style: disc;
+  padding-left: 1.1rem;
+}
+.chat-md ol {
+  list-style: decimal;
+  padding-left: 1.1rem;
+}
+.chat-md li + li {
+  margin-top: 0.25rem;
+}
+.chat-md strong {
+  font-weight: 600;
+}
+.chat-md a {
+  text-decoration: underline;
+}
+.chat-md code {
+  border-radius: 0.25rem;
+  background: var(--muted);
+  padding: 0 0.25rem;
+  font-size: 0.85em;
+}
