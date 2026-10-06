@@ -1,4 +1,5 @@
-import { firstRunCampaign, firstRunFolder, firstRunVoice, type Campaign, type Folder, type Prospect, type Voice } from './data'
+import { firstRunCampaign, firstRunFolder, firstRunVoice, type Campaign, type Folder, type Prospect, type Version, type Voice } from './data'
+import { htmlToMarkdown, looksLikeHtml } from './markdown'
 
 // Everything worth keeping between launches. UI-only state (open panels,
 // filters, theme) lives elsewhere.
@@ -46,10 +47,30 @@ export function withFolders(state: SavedState): SavedState {
   }
 }
 
+// Bodies saved before markdown were HTML; convert them once.
+function withMarkdown(state: SavedState): SavedState {
+  const md = (s: string) => (looksLikeHtml(s) ? htmlToMarkdown(s) : s)
+  return {
+    ...state,
+    prospects: state.prospects.map((p) => ({
+      ...p,
+      body: md(p.body),
+      originalBody: md(p.originalBody),
+      versions: p.versions.map((v) => {
+        const old = v as Version & { html?: string }
+        return { ...v, markdown: v.markdown ?? md(old.html ?? '') }
+      }),
+    })),
+  }
+}
+
+// Brings state saved by any earlier version up to date. Safe to run twice.
+export const upgrade = (state: SavedState) => withMarkdown(withFolders(state))
+
 // Claude work doesn't survive a restart: research that was running goes back
 // in the queue, and a chat reply that was being written is marked as cut off.
 function resume(saved: SavedState): SavedState {
-  const state = withFolders(saved)
+  const state = upgrade(saved)
   return {
     ...state,
     // Older saves stored attachments as bare file names with no file behind them.

@@ -136,12 +136,15 @@ const BriefSchema = z.object({
   sources: z.array(z.object({ title: z.string(), url: z.string() })),
 })
 
+// The markdown dialect email bodies are stored in (see the renderer's markdown.ts).
+const MARKDOWN = `Blank line between paragraphs; a single newline is a line break (e.g. between sign-off lines). **bold** and *italic* sparingly, [link text](https://url) for links, "- " or "1. " for lists, "> " for quotes. No headings, tables, images or HTML.`
+
 const EmailFields = {
   to: z.string().describe('Email of the single best recipient, or empty string if none has an address.'),
   subject: z.string(),
   body: z
     .string()
-    .describe('The email. Paragraphs separated by blank lines; sign-off lines separated by single newlines. **bold** sparingly; [text](url) for links.'),
+    .describe(`The email body in markdown. ${MARKDOWN}`),
 }
 
 const ResearchDraftSchema = z.object({
@@ -228,6 +231,8 @@ export async function draft(apiKey: string | undefined, req: DraftRequest): Prom
 
 const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes and the user's voice.
 
+The email body is markdown, exactly as stored: ${MARKDOWN} Links and formatting are part of the text you see and can change.
+
 To change the email, call the propose_edit tool: quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Each call becomes a suggestion the user can accept or reject, so prefer a few focused edits over rewriting everything, and stay in the user's voice. Use WebSearch only if the user asks for something the brief doesn't cover. Keep your messages short.`
 
 export async function chat(apiKey: string | undefined, req: ChatRequest, emit: Emit): Promise<Result<ChatResult>> {
@@ -239,8 +244,8 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
       'propose_edit',
       'Suggest replacing a passage of the email. The user sees it as an accept/reject card.',
       {
-        old: z.string().min(1).describe('Exact text currently in the email, copied verbatim.'),
-        new: z.string().min(1).describe('Replacement text.'),
+        old: z.string().min(1).describe('Exact text currently in the subject or body, copied verbatim, including any markdown such as [text](url) or **bold**.'),
+        new: z.string().min(1).describe('Replacement text, in the same markdown.'),
         reason: z.string().describe('A few words on why, shown to the user.'),
       },
       async (edit) => {

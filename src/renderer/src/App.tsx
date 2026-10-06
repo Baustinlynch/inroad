@@ -39,8 +39,8 @@ import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
 import { MAX_VOICE_EXAMPLES, type Attachment, type Campaign, type ChatMsg, type Folder, type ChatThread, type Prospect, type Version, type Voice, type VoiceExample } from './data'
 import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
-import { firstRun, persist, withFolders, type SavedState } from './persist'
-import { htmlHasText, htmlToText, replaceText, textToHtml } from './richtext'
+import { firstRun, persist, upgrade, type SavedState } from './persist'
+import { markdownToHtml, markdownToText, normalizeMarkdown } from './markdown'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Onboarding, type OnboardingResult } from './components/Onboarding'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
@@ -52,7 +52,7 @@ const UNDO_GRACE_MS = 5000
 type Theme = 'dark' | 'light'
 
 const needsReview = (p: Prospect) => p.status === 'drafted' || p.status === 'edited'
-const hasText = (p: Prospect | undefined, text: string) => !!p && !!text && (p.subject.includes(text) || htmlHasText(p.body, text))
+const hasText = (p: Prospect | undefined, text: string) => !!p && !!text && (p.subject.includes(text) || p.body.includes(text))
 const statusAfter = (p: Prospect, body: string): Prospect['status'] => (p.status === 'saved' ? 'saved' : body !== p.originalBody ? 'edited' : 'drafted')
 
 interface Toast {
@@ -80,8 +80,8 @@ function loadTheme(): Theme {
 }
 
 export default function App({ saved: loaded }: { saved: SavedState }) {
-  // Hot reloads can hand back state loaded by older code, from before folders.
-  const [saved] = useState(() => withFolders(loaded))
+  // Hot reloads can hand back state loaded by older code (before folders, or HTML bodies).
+  const [saved] = useState(() => upgrade(loaded))
   const [prospects, setProspects] = useState(saved.prospects)
   const [folders, setFolders] = useState(saved.folders)
   const [campaigns, setCampaigns] = useState(saved.campaigns)
@@ -220,17 +220,17 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     researching.current.delete(pid)
     if (!res.ok) return update(pid, (q) => ({ ...q, status: 'failed', error: res.error }))
     const { research, draft } = res.value
-    const html = textToHtml(draft.body)
+    const md = normalizeMarkdown(draft.body)
     update(pid, (q) => ({
       ...q,
       status: 'drafted',
       research,
       brief: draft.brief,
       subject: draft.subject,
-      body: html,
-      originalBody: html,
+      body: md,
+      originalBody: md,
       to: draft.to ? [draft.to] : [],
-      versions: [...q.versions, { id: crypto.randomUUID(), label: 'Claude’s draft', by: 'claude', at: Date.now(), html }],
+      versions: [...q.versions, { id: crypto.randomUUID(), label: 'Claude’s draft', by: 'claude', at: Date.now(), markdown: md }],
     }))
   }
   useEffect(() => {
@@ -608,7 +608,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   // example even if extracting notes fails.
   const learnVoice = async (p: Prospect): Promise<VoiceChange> => {
     const v = voiceOf(p.campaignId)
-    const example: VoiceExample = { id: crypto.randomUUID(), at: Date.now(), draft: htmlToText(p.originalBody), final: htmlToText(p.body) }
+    const example: VoiceExample = { id: crypto.randomUUID(), at: Date.now(), draft: p.originalBody, final: p.body }
     const base: VoiceChange = { voiceId: v.id, at: Date.now(), add: [], remove: [], example }
     if (!window.api) return base
     const res = await window.api.claude.learnVoice({ voiceName: v.name, notes: voiceInput(v).notes, draft: example.draft!, final: example.final })
@@ -634,7 +634,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       const p = get(pid)
       if (!p || !window.api) return
       const attachments = campaignsRef.current.find((c) => c.id === p.campaignId)?.attachments ?? []
-      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: p.body, text: htmlToText(p.body), attachments })
+      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: markdownToHtml(p.body), text: markdownToText(p.body), attachments })
       if (!res.ok) {
         update(pid, (q) => ({ ...q, status: prev === 'saved' ? 'edited' : prev, versions: q.versions.filter((v) => v.id !== versionId) }))
         return notify({ text: `Couldn’t save ${company} to Drafts: ${res.error}`, action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
@@ -649,7 +649,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       update(pid, (p) => ({
         ...p,
         status: 'saved',
-        versions: [...p.versions, { id: versionId, label: 'Saved to Drafts', by: 'you', at: Date.now(), html: p.body }],
+        versions: [...p.versions, { id: versionId, label: 'Saved to Drafts', by: 'you', at: Date.now(), markdown: p.body }],
       }))
       // Held back briefly so undo can cancel it before anything reaches the mailbox.
       sync.committed = false
@@ -706,26 +706,26 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     const research = p.research ?? (p.brief ? JSON.stringify(p.brief) : '')
     if (!research) return notify({ text: 'Nothing to redraft from yet. Retry the research first.' })
     setRegeneratingId(pid)
-    const res = await window.api.claude.draft({ ...claudeContext(p), research, previousDraft: `Subject: ${p.subject}\n\n${htmlToText(p.body)}` })
+    const res = await window.api.claude.draft({ ...claudeContext(p), research, previousDraft: `Subject: ${p.subject}\n\n${p.body}` })
     setRegeneratingId(null)
     if (!res.ok) return notify({ text: `Couldn’t regenerate: ${res.error}` })
     const q = get(pid)
     if (!q) return
-    const html = textToHtml(res.value.body)
+    const md = normalizeMarkdown(res.value.body)
     const subject = res.value.subject
     const before = { body: q.body, originalBody: q.originalBody, subject: q.subject, status: q.status }
     // Keep your edits in history so regenerating never loses work.
     const added: Version[] = [
-      ...(q.versions.some((v) => v.html === q.body)
+      ...(q.versions.some((v) => v.markdown === q.body)
         ? []
-        : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), html: q.body }]),
-      { id: crypto.randomUUID(), label: 'Regenerated draft', by: 'claude', at: Date.now(), html },
+        : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), markdown: q.body }]),
+      { id: crypto.randomUUID(), label: 'Regenerated draft', by: 'claude', at: Date.now(), markdown: md },
     ]
     const apply = () =>
       update(pid, (x) => ({
         ...x,
-        body: html,
-        originalBody: html,
+        body: md,
+        originalBody: md,
         subject,
         status: x.status === 'saved' ? 'saved' : 'drafted',
         versions: [...x.versions.filter((v) => !added.some((a) => a.id === v.id)), ...added],
@@ -747,14 +747,14 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     if (!selected) return
     const { id: pid, body: prevBody } = selected
     const setBody = (body: string) => update(pid, (p) => ({ ...p, body, status: statusAfter(p, body) }))
-    if (!selected.versions.some((x) => x.html === prevBody))
-      update(pid, (p) => ({ ...p, versions: [...p.versions, { id: crypto.randomUUID(), label: 'Your edits', by: 'you', at: Date.now(), html: prevBody }] }))
-    setBody(v.html)
+    if (!selected.versions.some((x) => x.markdown === prevBody))
+      update(pid, (p) => ({ ...p, versions: [...p.versions, { id: crypto.randomUUID(), label: 'Your edits', by: 'you', at: Date.now(), markdown: prevBody }] }))
+    setBody(v.markdown)
     record(
       `Restored “${v.label}”`,
       pid,
       () => setBody(prevBody),
-      () => setBody(v.html),
+      () => setBody(v.markdown),
     )
   }
 
@@ -777,7 +777,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const swapText = (pid: string, from: string, to: string) =>
     update(pid, (p) => {
       if (p.subject.includes(from)) return { ...p, subject: p.subject.replace(from, () => to) }
-      const body = replaceText(p.body, from, to)
+      // Re-normalise so the stored text matches what the editor would write.
+      const body = normalizeMarkdown(p.body.replace(from, () => to))
       return { ...p, body, status: statusAfter(p, body) }
     })
 
@@ -1280,7 +1281,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       ...claudeContext(p),
       brief: p.brief,
       subject: p.subject,
-      body: htmlToText(p.body),
+      body: p.body,
       history,
       message: text,
     })

@@ -68,7 +68,7 @@ export const GLOBAL_SHORTCUTS: [string, string][] = [
   ['⌘ D', 'Compare with Claude’s draft'],
   ['⌘ ,', 'Settings (mailbox and Claude API key)'],
   ['⌘ R', 'Regenerate draft'],
-  ['⌘ B', 'Bold (also ⌘ I italic, ⌘ U underline)'],
+  ['⌘ B', 'Bold (also ⌘ I italic, ⌘ ⇧ S strikethrough)'],
   ['esc', 'Leave the text box'],
 ]
 

@@ -28,7 +28,8 @@ export interface Version {
   label: string
   by: 'claude' | 'you'
   at: number
-  html: string
+  // The email body at that point, as markdown.
+  markdown: string
   deletedAt?: number
 }
 
@@ -54,6 +55,8 @@ export interface Prospect {
   // Claude's research notes with sources, so redrafting doesn't search again.
   research?: string
   subject: string
+  // Email bodies are markdown (see markdown.ts). originalBody is Claude's
+  // latest draft, body is the current text.
   originalBody: string
   body: string
   to: string[]

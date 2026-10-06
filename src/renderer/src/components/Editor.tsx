@@ -29,10 +29,9 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Attachment, Prospect, Version } from '../data'
 import { changeCount } from '../diff'
-import { htmlToText } from '../richtext'
 import { DiffText } from './DiffText'
 import { ButtonKeys, Hint } from './hint'
 import { RichEditor } from './RichEditor'
@@ -68,8 +67,9 @@ export function Editor(props: Props) {
   const [newTo, setNewTo] = useState('')
   const [website, setWebsite] = useState('')
   const hasDraft = !!p.originalBody
-  const originalText = useMemo(() => htmlToText(p.originalBody), [p.originalBody])
-  const bodyText = useMemo(() => htmlToText(p.body), [p.body])
+  // Diffs compare the markdown itself, so link and formatting changes show too.
+  const originalText = p.originalBody
+  const bodyText = p.body
   const changes = hasDraft ? changeCount(originalText, bodyText) : 0
 
   const setBody = (body: string) =>
@@ -312,7 +312,7 @@ function HistoryMenu({
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Restore a version. ⌘Z undoes it.</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {[...versions].reverse().map((v) => {
-          const isCurrent = v.html === current
+          const isCurrent = v.markdown === current
           return (
             <DropdownMenuItem key={v.id} disabled={isCurrent} onSelect={() => onRestore(v)}>
               <span className={cn('size-1.5 shrink-0 rounded-full', v.by === 'claude' ? 'bg-primary' : 'bg-success')} />

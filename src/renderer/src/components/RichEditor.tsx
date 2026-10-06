@@ -1,20 +1,19 @@
-import Blockquote from '@tiptap/extension-blockquote'
-import { DOMParser as PMDOMParser } from '@tiptap/pm/model'
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
-import StarterKit from '@tiptap/starter-kit'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
-import { Bold, Check, Copy, ExternalLink, Italic, Link2, List, ListOrdered, Pencil, RemoveFormatting, Strikethrough, TextQuote, Underline, Unlink } from 'lucide-react'
+import { Bold, Check, Copy, ExternalLink, Italic, Link2, List, ListOrdered, Pencil, RemoveFormatting, Strikethrough, TextQuote, Unlink } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { emailExtensions, parseMarkdown } from '../markdown'
 import { currentEditor, historyDepth, undoBridge } from '../undo'
 import { Hint, Keys } from './hint'
 
 interface Props {
+  // Markdown (see markdown.ts).
   value: string
-  onChange: (html: string) => void
+  onChange: (markdown: string) => void
 }
 
 // What the link popover is editing: the range it applies to, plus the text and
@@ -38,20 +37,9 @@ export function RichEditor({ value, onChange }: Props) {
   const startLinkRef = useRef<() => void>(() => {})
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: false,
-        code: false,
-        codeBlock: false,
-        horizontalRule: false,
-        trailingNode: false,
-        blockquote: false,
-        link: { openOnClick: false, autolink: true, linkOnPaste: true, defaultProtocol: 'https' },
-      }),
-      // ⌘⇧B is the app-wide "brief" shortcut, so quotes are toolbar-only.
-      Blockquote.extend({ addKeyboardShortcuts: () => ({}) }),
-    ],
+    extensions: emailExtensions({ autolink: true, linkOnPaste: true, defaultProtocol: 'https' }),
     content: value,
+    contentType: 'markdown',
     editorProps: {
       attributes: { id: 'email-body', class: 'email-body min-h-72 pt-4 pb-2 outline-none' },
       handleKeyDown: (view, e) => {
@@ -81,12 +69,12 @@ export function RichEditor({ value, onChange }: Props) {
         return !!href
       },
     },
-    onUpdate: ({ editor }) => onChangeRef.current(editor.getHTML()),
+    onUpdate: ({ editor }) => onChangeRef.current(editor.getMarkdown()),
   })
 
   // Pick up changes made outside the editor: accepted suggestions, restored versions.
   useEffect(() => {
-    if (editor && editor.getHTML() !== value) patchContent(editor, value)
+    if (editor && editor.getMarkdown() !== value) patchContent(editor, value)
   }, [editor, value])
 
   startLinkRef.current = () => {
@@ -109,7 +97,6 @@ export function RichEditor({ value, onChange }: Props) {
       e && {
         bold: e.isActive('bold'),
         italic: e.isActive('italic'),
-        underline: e.isActive('underline'),
         strike: e.isActive('strike'),
         bulletList: e.isActive('bulletList'),
         orderedList: e.isActive('orderedList'),
@@ -150,9 +137,6 @@ export function RichEditor({ value, onChange }: Props) {
         </ToolBtn>
         <ToolBtn label="Italic" keys="⌘ I" active={state.italic} onClick={() => editor.chain().focus().toggleItalic().run()}>
           <Italic />
-        </ToolBtn>
-        <ToolBtn label="Underline" keys="⌘ U" active={state.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}>
-          <Underline />
         </ToolBtn>
         <ToolBtn label="Strikethrough" keys="⌘ ⇧ S" active={state.strike} onClick={() => editor.chain().focus().toggleStrike().run()}>
           <Strikethrough />
@@ -291,10 +275,8 @@ function LinkForm({
 // only the part of the document that differs. Replacing the whole doc would
 // turn the editor's earlier undo steps into no-ops. Kept out of the editor's
 // history because the app's undo stack owns these changes.
-function patchContent(editor: Editor, html: string) {
-  const el = document.createElement('div')
-  el.innerHTML = html
-  const next = PMDOMParser.fromSchema(editor.schema).parse(el)
+function patchContent(editor: Editor, markdown: string) {
+  const next = editor.schema.nodeFromJSON(parseMarkdown(markdown))
   const cur = editor.state.doc
   const start = cur.content.findDiffStart(next.content)
   if (start == null) return

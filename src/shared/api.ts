@@ -59,7 +59,7 @@ export interface DraftResult {
   // The recipient Claude thinks is best, or '' if none has an address.
   to: string
   subject: string
-  // Lightweight markdown: blank-line paragraphs, **bold**, [text](url).
+  // Markdown (the same dialect the app stores; see markdown.ts).
   body: string
 }
 
@@ -70,7 +70,7 @@ export interface ChatRequest {
   brief?: Brief
   voice: VoiceInput
   subject: string
-  // The email as plain text; suggested edits quote from this.
+  // The email body as markdown; suggested edits quote from this.
   body: string
   history: { role: 'user' | 'assistant'; text: string }[]
   message: string
