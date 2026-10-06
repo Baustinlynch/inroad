@@ -29,10 +29,17 @@ async function run<T>(creds: MailCreds, fn: (client: ImapFlow) => Promise<T>): P
 
 // imapflow's errors are terse; translate the common ones.
 function friendly(err: unknown): string {
-  const e = err as { message?: string; authenticationFailed?: boolean; code?: string }
+  const e = err as { message?: string; authenticationFailed?: boolean; code?: string; responseText?: string; executedCommand?: string }
   if (e.authenticationFailed) return 'The server rejected the username or password. Most providers need an app password.'
   if (e.code === 'ENOTFOUND') return 'Couldn’t find that mail server. Check the server name.'
   if (e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT') return 'Couldn’t reach the mail server. Check the server and port.'
+  // The server said no to a command: its own reason is far more useful than "Command failed".
+  if (e.message === 'Command failed') {
+    // "A12 APPEND "Drafts" ..." → "APPEND". Only the verb: the rest can include message details.
+    const verb = e.executedCommand?.split(' ')[1]
+    console.error('[mail] server refused', verb ?? 'a command', '—', e.responseText ?? '(no reason given)')
+    return `The mail server refused${verb ? ` ${verb}` : ' the request'}: ${e.responseText || 'no reason given'}`
+  }
   return e.message ?? String(err)
 }
 
