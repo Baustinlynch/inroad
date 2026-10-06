@@ -1,5 +1,5 @@
 import { firstRunCampaign, firstRunFolder, firstRunVoice, type Campaign, type Folder, type Prospect, type Version, type Voice } from './data'
-import { htmlToMarkdown, looksLikeHtml } from './markdown'
+import { htmlToMarkdown, looksLikeHtml, type EmailStyle } from './markdown'
 
 // Everything worth keeping between launches. UI-only state (open panels,
 // filters, theme) lives elsewhere.
@@ -15,6 +15,8 @@ export interface SavedState {
   event?: { name: string; details: string }
   // False until the first-run setup is finished (or skipped).
   onboarded?: boolean
+  // How saved emails look (Settings → Email style).
+  emailStyle?: EmailStyle
 }
 
 export function firstRun(): SavedState {

@@ -3,9 +3,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { ArrowLeft, ArrowRight, Check, CircleAlert, Loader2, Mail, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, CircleAlert, Loader2, Plus, Sparkles, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import type { PublicSettings } from '../../../shared/api'
 import { FolderFields, type FolderInfo } from './FolderFields'
+import { MailboxForm } from './settings/GeneralPages'
 
 export interface OnboardingResult {
   // The first folder, usually the event.
@@ -22,14 +24,15 @@ const CAMPAIGN_IDEAS = ['Sponsors', 'Venues', 'Partners', 'Speakers', 'Judges']
 export function Onboarding({
   onFinish,
   onSkip,
-  mailConnected,
-  onConnectMail,
+  settings,
+  onSettings,
 }: {
   onFinish: (r: OnboardingResult) => void
   onSkip: () => void
-  mailConnected: boolean
-  onConnectMail: () => void
+  settings: PublicSettings | null
+  onSettings: (s: PublicSettings) => void
 }) {
+  const mailConnected = !!settings?.mail && !!settings.hasMailPassword
   const [step, setStep] = useState(0)
   const [folder, setFolder] = useState<FolderInfo>({ name: '', notes: '' })
   const [campaign, setCampaign] = useState({ name: 'Sponsors', notes: '' })
@@ -86,7 +89,9 @@ export function Onboarding({
               placeholder="e.g. Sponsorship: Gold $5k with a prize track, or API credits and a workshop. Look for dev tools with a free tier and grad hiring in Sydney. Mention the prospectus."
               className="min-h-40 leading-relaxed"
             />
-            <p className="text-xs text-muted-foreground">Include tiers or prices, what they get back, and what Claude should look for when researching each one.</p>
+            <p className="text-xs text-muted-foreground">
+              Include tiers or prices, what they get back, and what Claude should look for when researching each one.
+            </p>
           </div>
         </div>
       ),
@@ -175,21 +180,17 @@ export function Onboarding({
     },
     {
       title: 'Connect your mailbox',
-      description: 'Inroad saves each email to your Drafts folder so you can send it from your normal mail app. It never sends anything itself.',
+      description:
+        'Inroad saves each email to your Drafts folder so you can send it from your normal mail app. It never sends anything itself. You can skip this and do it later.',
       canContinue: true,
-      next: 'Start adding organisations',
-      body: (
+      next: mailConnected ? 'Start adding organisations' : 'Skip and start adding organisations',
+      body: mailConnected ? (
         <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-4 text-sm">
-          <Mail className="size-5 shrink-0 text-muted-foreground" />
-          <span className="flex-1">{mailConnected ? 'Your mailbox is connected.' : 'Works with Gmail, Fastmail, iCloud, Outlook or any IMAP mailbox. You can also do this later.'}</span>
-          {mailConnected ? (
-            <Check className="size-5 text-success" />
-          ) : (
-            <Button variant="outline" size="sm" onClick={onConnectMail}>
-              Connect
-            </Button>
-          )}
+          <Check className="size-5 text-success" />
+          <span className="flex-1">Connected as {settings?.mail?.fromEmail}. You can change this later in Settings.</span>
         </div>
+      ) : (
+        <MailboxForm settings={settings} onSaved={onSettings} />
       ),
     },
   ]

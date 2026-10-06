@@ -26,22 +26,34 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { toast } from 'sonner'
 import { CommandPalette, ShortcutsDialog, type PaletteCommand } from './components/CommandPalette'
-import { AddCompaniesDialog, ProfilesDialog, type ProfilesTarget } from './components/Modals'
+import { AddCompaniesDialog } from './components/AddCompaniesDialog'
 import { Editor } from './components/Editor'
 import { activeChat, RightPanel, type Tab } from './components/RightPanel'
-import { TrashView, type TrashItem } from './components/TrashView'
+import type { TrashItem } from './components/TrashView'
+import { SettingsSidebar, type SettingsPage } from './components/settings/SettingsSidebar'
+import { SettingsView } from './components/settings/SettingsView'
 import { AppSidebar, inFilter, type Filter } from './components/Sidebar'
 import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
-import { MAX_VOICE_EXAMPLES, type Attachment, type Campaign, type ChatMsg, type Folder, type ChatThread, type Prospect, type Version, type Voice, type VoiceExample } from './data'
+import {
+  MAX_VOICE_EXAMPLES,
+  type Attachment,
+  type Campaign,
+  type ChatMsg,
+  type Folder,
+  type ChatThread,
+  type Prospect,
+  type Version,
+  type Voice,
+  type VoiceExample,
+} from './data'
 import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
 import { firstRun, persist, upgrade, type SavedState } from './persist'
-import { markdownToHtml, markdownToText, normalizeMarkdown } from './markdown'
-import { SettingsDialog } from './components/SettingsDialog'
+import { defaultEmailStyle, emailHtml, emailStyleVars, markdownToText, normalizeMarkdown, type EmailStyle } from './markdown'
 import { Onboarding, type OnboardingResult } from './components/Onboarding'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
 
@@ -86,29 +98,36 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const [folders, setFolders] = useState(saved.folders)
   const [campaigns, setCampaigns] = useState(saved.campaigns)
   const [voices, setVoices] = useState(saved.voices)
-  // Main area: the selected email, or the Deleted items page.
-  const [view, setView] = useState<'email' | 'trash'>('email')
+  // The email workspace, or Settings (which swaps in its own sidebar).
+  const [view, setView] = useState<'email' | 'settings'>('email')
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>({ kind: 'mailbox' })
   const [campaignId, setCampaignId] = useState(saved.campaignId)
   const [selectedId, setSelectedId] = useState(saved.selectedId)
   // Saves from before onboarding existed count as onboarded.
   const [onboarded, setOnboarded] = useState(saved.onboarded !== false)
+  const [emailStyle, setEmailStyle] = useState<EmailStyle>(saved.emailStyle ?? defaultEmailStyle)
+  const emailStyleRef = useRef(emailStyle)
+  emailStyleRef.current = emailStyle
 
   // Persist to disk (Electron only) whenever the saved state changes.
   useEffect(() => {
-    persist({ version: 1, prospects, folders, campaigns, voices, campaignId, selectedId, onboarded })
-  }, [prospects, folders, campaigns, voices, campaignId, selectedId, onboarded])
+    persist({ version: 1, prospects, folders, campaigns, voices, campaignId, selectedId, onboarded, emailStyle })
+  }, [prospects, folders, campaigns, voices, campaignId, selectedId, onboarded, emailStyle])
   const [tab, setTab] = useState<Tab>('chat')
   const [filter, setFilter] = useState<Filter>('all')
   const [showDiff, setShowDiff] = useState(false)
   const [adding, setAdding] = useState(false)
-  const [profiles, setProfiles] = useState<null | ProfilesTarget>(null)
   const [palette, setPalette] = useState(false)
   const [help, setHelp] = useState(false)
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   // Mailbox & API key settings (secrets stay in the main process).
   const [settings, setSettings] = useState<PublicSettings | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const openSettings = (page: SettingsPage = settingsPage) => {
+    setSettingsPage(page)
+    setView('settings')
+  }
+  const closeSettings = () => setView('email')
   useEffect(() => {
     window.api?.settings.get().then(setSettings)
   }, [])
@@ -145,7 +164,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const selected = inCampaign.find((p) => p.id === selectedId)
   const shown = inCampaign.filter((p) => inFilter[filter](p.status))
   const update = (id: string, fn: (p: Prospect) => Prospect) => setProspects((ps) => ps.map((p) => (p.id === id ? fn(p) : p)))
-  const overlayOpen = adding || !!profiles || palette || help || settingsOpen || (!rightDocks && rightOpen)
+  const overlayOpen = adding || palette || help || (!rightDocks && rightOpen)
   // Latest state for callbacks that run later (timers, undo closures).
   const prospectsRef = useRef(prospects)
   prospectsRef.current = prospects
@@ -384,7 +403,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
 
   // A deleted voice falls back to the first one left; restoring it brings it back.
   const voice = aliveVoices.find((v) => v.id === campaign.voiceId) ?? aliveVoices[0]
-  const editVoices = () => setProfiles({ kind: 'voice', id: voice.id })
+  const editVoices = () => openSettings({ kind: 'voice', id: voice.id })
 
   const setVoice = (voiceId: string) => {
     const cid = campaignId
@@ -450,7 +469,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const deleteFolder = (id: string) => {
     const f = folders.find((x) => x.id === id)
     if (!f || aliveFolders.length < 2) return notify({ text: 'You need at least one folder' })
-    if (profiles?.kind === 'folder' && profiles.id === id) setProfiles(null)
+    if (settingsPage.kind === 'folder' && settingsPage.id === id) setSettingsPage({ kind: 'mailbox' })
     const other = aliveCampaigns.find((c) => c.folderId !== id)
     if (campaign.folderId === id) {
       if (other) switchCampaign(other.id)
@@ -480,7 +499,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const deleteVoice = (id: string) => {
     const v = voices.find((x) => x.id === id)
     if (!v || aliveVoices.length < 2) return notify({ text: 'You need at least one voice' })
-    if (profiles?.kind === 'voice' && profiles.id === id) setProfiles({ kind: 'voice', id: aliveVoices.find((x) => x.id !== id)!.id })
+    if (settingsPage.kind === 'voice' && settingsPage.id === id) setSettingsPage({ kind: 'voice', id: aliveVoices.find((x) => x.id !== id)!.id })
     softDelete(`the ${v.name} voice`, (at) => setVoiceDeleted(id, at))
   }
 
@@ -500,7 +519,12 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     const note = { text, fresh: false }
     const apply = () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, notes: [...v.notes, note] } : v)))
     apply()
-    record('Added a style note', undefined, () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, notes: v.notes.filter((n) => n !== note) } : v))), apply)
+    record(
+      'Added a style note',
+      undefined,
+      () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, notes: v.notes.filter((n) => n !== note) } : v))),
+      apply,
+    )
   }
 
   const setExampleDeleted = (voiceId: string, exampleId: string, at?: number) =>
@@ -544,12 +568,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     const file = c.attachments[i]
     const apply = () => setAttachments(campaignId, (as) => as.filter((a) => a.id !== id))
     apply()
-    record(
-      `Removed ${file.name}`,
-      undefined,
-      () => setAttachments(campaignId, (as) => [...as.slice(0, i), file, ...as.slice(i)]),
-      apply,
-    )
+    record(`Removed ${file.name}`, undefined, () => setAttachments(campaignId, (as) => [...as.slice(0, i), file, ...as.slice(i)]), apply)
   }
 
   const deleteVersion = (v: Version) => {
@@ -619,7 +638,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
 
   const save = () => {
     if (!selected?.originalBody) return
-    if (!mailReady) return notify({ text: 'Connect your mailbox to save drafts', action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
+    if (!mailReady)
+      return notify({ text: 'Connect your mailbox to save drafts', action: { label: 'Open settings', run: () => openSettings({ kind: 'mailbox' }) } })
     const { id: pid, status: prev, company, draftRef: prevRef } = selected
     const edited = selected.body !== selected.originalBody
     const versionId = crypto.randomUUID()
@@ -634,10 +654,19 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       const p = get(pid)
       if (!p || !window.api) return
       const attachments = campaignsRef.current.find((c) => c.id === p.campaignId)?.attachments ?? []
-      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: markdownToHtml(p.body), text: markdownToText(p.body), attachments })
+      const res = await window.api.mail.saveDraft({
+        to: p.to,
+        subject: p.subject,
+        html: emailHtml(p.body, emailStyleRef.current),
+        text: markdownToText(p.body),
+        attachments,
+      })
       if (!res.ok) {
         update(pid, (q) => ({ ...q, status: prev === 'saved' ? 'edited' : prev, versions: q.versions.filter((v) => v.id !== versionId) }))
-        return notify({ text: `Couldn’t save ${company} to Drafts: ${res.error}`, action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
+        return notify({
+          text: `Couldn’t save ${company} to Drafts: ${res.error}`,
+          action: { label: 'Open settings', run: () => openSettings({ kind: 'mailbox' }) },
+        })
       }
       sync.ref = res.value
       update(pid, (q) => ({ ...q, draftRef: res.value }))
@@ -669,7 +698,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
         if (n && v)
           notify({
             text: `Updated ${v.name}: ${[change.add.length && `${change.add.length} new note${change.add.length > 1 ? 's' : ''}`, change.remove.length && `${change.remove.length} removed`].filter(Boolean).join(', ')}`,
-            action: { label: 'View', run: () => setProfiles({ kind: 'voice', id: v.id }) },
+            action: { label: 'View', run: () => openSettings({ kind: 'voice', id: v.id }) },
           })
       })
     }
@@ -920,6 +949,15 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
         return e.shiftKey ? appRedo() : appUndo()
       }
 
+      // In Settings only ⌘, and Esc (back) apply; the email shortcuts don't.
+      if (view === 'settings') {
+        if (mod && e.key === ',') {
+          e.preventDefault()
+          closeSettings()
+        } else if (e.key === 'Escape' && !typing) closeSettings()
+        return
+      }
+
       // Modifier shortcuts work everywhere, including mid-typing, since most of
       // the time focus is in the email or the chat box.
       if (mod) {
@@ -928,7 +966,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
           e.preventDefault()
           fn()
         }
-        if (key === ',') return run(() => setSettingsOpen(true))
+        if (key === ',') return run(() => openSettings())
         if (key === 'enter') return run(e.shiftKey ? () => resolveNextProposal(true) : save)
         if (key === 'backspace' && e.shiftKey) return run(() => resolveNextProposal(false))
         if (key === '/') return run(toggleChatFocus)
@@ -1151,7 +1189,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       run: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
     },
     { id: 'help', group: 'Actions', label: 'Keyboard shortcuts', icon: <Keyboard />, shortcut: '?', run: () => setHelp(true) },
-    { id: 'settings', group: 'Actions', label: 'Settings', icon: <Settings />, shortcut: '⌘,', run: () => setSettingsOpen(true) },
+    { id: 'settings', group: 'Actions', label: 'Settings', icon: <Settings />, shortcut: '⌘,', run: () => openSettings() },
     { id: 'new-chat', group: 'Actions', label: 'New chat', icon: <MessageSquarePlus />, run: newChat },
     ...(selected && activeChat(selected)
       ? [
@@ -1176,7 +1214,13 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
           },
         ]
       : []),
-    { id: 'trash', group: 'Actions', label: `Deleted items${trash.length ? ` (${trash.length})` : ''}`, icon: <Trash2 />, run: () => setView('trash') },
+    {
+      id: 'trash',
+      group: 'Actions',
+      label: `Deleted items${trash.length ? ` (${trash.length})` : ''}`,
+      icon: <Trash2 />,
+      run: () => openSettings({ kind: 'trash' }),
+    },
     ...aliveVoices
       .filter((v) => v.id !== voice.id)
       .map<PaletteCommand>((v) => ({
@@ -1202,16 +1246,28 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       group: 'Campaigns & voices',
       label: `Edit ${folder.name || 'folder'} context`,
       icon: <FolderOpen />,
-      run: () => setProfiles({ kind: 'folder', id: folder.id }),
+      run: () => openSettings({ kind: 'folder', id: folder.id }),
     },
-    { id: 'new-folder', group: 'Campaigns & voices', label: 'New folder', icon: <FolderPlus />, run: () => setProfiles({ kind: 'folder', id: createFolder() }) },
-    { id: 'campaign', group: 'Campaigns & voices', label: 'Edit campaign notes', icon: <Flag />, run: () => setProfiles({ kind: 'campaign', id: campaignId }) },
+    {
+      id: 'new-folder',
+      group: 'Campaigns & voices',
+      label: 'New folder',
+      icon: <FolderPlus />,
+      run: () => openSettings({ kind: 'folder', id: createFolder() }),
+    },
+    {
+      id: 'campaign',
+      group: 'Campaigns & voices',
+      label: 'Edit campaign notes',
+      icon: <Flag />,
+      run: () => openSettings({ kind: 'campaign', id: campaignId }),
+    },
     {
       id: 'new-campaign',
       group: 'Campaigns & voices',
       label: 'New campaign',
       icon: <Plus />,
-      run: () => setProfiles({ kind: 'campaign', id: createCampaign() }),
+      run: () => openSettings({ kind: 'campaign', id: createCampaign() }),
     },
   ]
 
@@ -1323,7 +1379,6 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     setFolders(fresh.folders)
     setOnboarded(false)
     setView('email')
-    setSettingsOpen(false)
     notify({ text: 'Started fresh' })
   }
 
@@ -1343,65 +1398,53 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     />
   )
 
-  const main =
-    view === 'trash' ? (
-      <TrashView items={trash} onRestore={restoreItem} onPurge={purgeItem} onEmpty={emptyTrash} />
-    ) : selected ? (
-      <Editor
-        prospect={selected}
-        from={settings?.mail?.fromEmail ? `${settings.mail.fromName ? `${settings.mail.fromName} ` : ''}<${settings.mail.fromEmail}>` : ''}
-        voiceName={voice.name}
-        attachments={campaign.attachments}
-        queuePosition={queuePosition}
-        showDiff={showDiff}
-        onToggleDiff={() => setShowDiff((v) => !v)}
-        regenerating={regeneratingId === selected.id}
-        onRegenerate={regenerate}
-        onRestoreVersion={restoreVersion}
-        onDeleteVersion={deleteVersion}
-        onChange={(patch) => (patch.to ? setRecipients(patch.to) : update(selected.id, (p) => ({ ...p, ...patch })))}
-        onRetry={(website) => update(selected.id, (p) => ({ ...p, status: 'queued', progress: [], error: undefined, domain: website || p.domain }))}
-        onSave={save}
-        panelTab={rightOpen ? tab : null}
-        showPanelButtons={!(rightDocks && rightOpen)}
-        pendingSuggestions={(activeChat(selected)?.messages ?? []).flatMap((m) => m.proposals ?? []).filter((x) => x.state === 'pending').length}
-        onPanel={togglePanel}
-      />
-    ) : (
-      <div className="flex h-full flex-col items-start justify-center gap-3 px-10">
-        <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
-        <p className="max-w-md text-muted-foreground">
-          {campaign.notes.trim()
-            ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
-            : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
-        </p>
-        <div className="flex gap-2">
-          {!campaign.notes.trim() && (
-            <Button onClick={() => setProfiles({ kind: 'campaign', id: campaign.id })}>
-              <Flag /> Write campaign notes
-            </Button>
-          )}
-          <Button variant={campaign.notes.trim() ? 'default' : 'outline'} onClick={() => setAdding(true)}>
-            <Plus /> Add to campaign
+  const main = selected ? (
+    <Editor
+      prospect={selected}
+      bodyStyle={emailStyleVars(emailStyle) as CSSProperties}
+      from={settings?.mail?.fromEmail ? `${settings.mail.fromName ? `${settings.mail.fromName} ` : ''}<${settings.mail.fromEmail}>` : ''}
+      voiceName={voice.name}
+      attachments={campaign.attachments}
+      queuePosition={queuePosition}
+      showDiff={showDiff}
+      onToggleDiff={() => setShowDiff((v) => !v)}
+      regenerating={regeneratingId === selected.id}
+      onRegenerate={regenerate}
+      onRestoreVersion={restoreVersion}
+      onDeleteVersion={deleteVersion}
+      onChange={(patch) => (patch.to ? setRecipients(patch.to) : update(selected.id, (p) => ({ ...p, ...patch })))}
+      onRetry={(website) => update(selected.id, (p) => ({ ...p, status: 'queued', progress: [], error: undefined, domain: website || p.domain }))}
+      onSave={save}
+      panelTab={rightOpen ? tab : null}
+      showPanelButtons={!(rightDocks && rightOpen)}
+      pendingSuggestions={(activeChat(selected)?.messages ?? []).flatMap((m) => m.proposals ?? []).filter((x) => x.state === 'pending').length}
+      onPanel={togglePanel}
+    />
+  ) : (
+    <div className="flex h-full flex-col items-start justify-center gap-3 px-10">
+      <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
+      <p className="max-w-md text-muted-foreground">
+        {campaign.notes.trim()
+          ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
+          : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
+      </p>
+      <div className="flex gap-2">
+        {!campaign.notes.trim() && (
+          <Button onClick={() => openSettings({ kind: 'campaign', id: campaign.id })}>
+            <Flag /> Write campaign notes
           </Button>
-        </div>
+        )}
+        <Button variant={campaign.notes.trim() ? 'default' : 'outline'} onClick={() => setAdding(true)}>
+          <Plus /> Add to campaign
+        </Button>
       </div>
-    )
-
-  const settingsDialog = (
-    <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} onReset={startFresh} />
+    </div>
   )
 
   if (!onboarded)
     return (
       <TooltipProvider delayDuration={300}>
-        <Onboarding
-          onFinish={finishOnboarding}
-          onSkip={() => setOnboarded(true)}
-          mailConnected={!!settings?.mail && !!settings.hasMailPassword}
-          onConnectMail={() => setSettingsOpen(true)}
-        />
-        {settingsDialog}
+        <Onboarding onFinish={finishOnboarding} onSkip={() => setOnboarded(true)} settings={settings} onSettings={setSettings} />
         <Toaster theme={theme} position="bottom-center" />
       </TooltipProvider>
     )
@@ -1409,61 +1452,119 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   return (
     <TooltipProvider delayDuration={300}>
       <SidebarProvider open={leftOpen} onOpenChange={setLeftOpen} className="h-svh min-h-0 overflow-hidden">
-        <AppSidebar
-          prospects={inCampaign}
-          allProspects={prospects.filter((p) => !p.deletedAt)}
-          campaigns={aliveCampaigns}
-          campaignId={campaign.id}
-          voices={aliveVoices}
-          onDeleteProspect={deleteProspect}
-          onDeleteCampaign={deleteCampaign}
-          trashCount={trash.length}
-          viewingTrash={view === 'trash'}
-          onOpenTrash={() => setView((v) => (v === 'trash' ? 'email' : 'trash'))}
-          mailAddress={mailReady ? settings?.mail?.fromEmail : undefined}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onSwitchCampaign={switchCampaign}
-          onEditCampaign={(id) => setProfiles({ kind: 'campaign', id })}
-          onNewCampaign={() => setProfiles({ kind: 'campaign', id: createCampaign() })}
-          folders={aliveFolders}
-          onEditFolder={(id) => setProfiles({ kind: 'folder', id })}
-          onNewFolder={() => setProfiles({ kind: 'folder', id: createFolder() })}
-          onSetVoice={setVoice}
-          onEditVoices={editVoices}
-          selectedId={selectedId}
-          onSelect={select}
-          onAdd={() => setAdding(true)}
-          filter={filter}
-          onFilter={setFilter}
-          theme={theme}
-          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-          onOpenPalette={() => setPalette(true)}
-          onShowKeys={() => setHelp(true)}
-        />
-        <SidebarInset className="min-w-0 overflow-hidden">
-          {rightDocks && selected && view === 'email' ? (
-            <ResizablePanelGroup
-              orientation="horizontal"
-              className="h-full"
-              // Fires on every drag step (unlike Panel.onResize, which waits for a
-              // ResizeObserver), so the panel's content appears as soon as it opens.
-              onLayoutChange={(layout) => {
-                const open = (layout.panel ?? 0) > 0.5
-                if (open !== rightOpen) setRightOpen(open)
-              }}
-            >
-              <ResizablePanel id="main" minSize={420}>
-                {main}
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel id="panel" panelRef={rightPanelRef} collapsible collapsedSize={0} defaultSize={rightOpen ? 380 : 0} minSize={300} maxSize={640}>
-                {rightOpen && panel}
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          ) : (
-            main
-          )}
-        </SidebarInset>
+        {view === 'settings' ? (
+          <>
+            <SettingsSidebar
+              page={settingsPage}
+              onPage={setSettingsPage}
+              onBack={closeSettings}
+              folders={aliveFolders}
+              campaigns={aliveCampaigns}
+              voices={aliveVoices}
+              trashCount={trash.length}
+              onNewFolder={() => openSettings({ kind: 'folder', id: createFolder() })}
+              onNewCampaign={(folderId) => openSettings({ kind: 'campaign', id: createCampaign(folderId) })}
+              onNewVoice={() => openSettings({ kind: 'voice', id: createVoice() })}
+            />
+            <SidebarInset className="@container min-w-0 overflow-hidden">
+              <SettingsView
+                page={settingsPage}
+                onPage={setSettingsPage}
+                settings={settings}
+                onSettings={setSettings}
+                emailStyle={emailStyle}
+                onEmailStyle={setEmailStyle}
+                theme={theme}
+                onTheme={setTheme}
+                trash={trash}
+                onRestore={restoreItem}
+                onPurge={purgeItem}
+                onEmptyTrash={emptyTrash}
+                onReset={startFresh}
+                folders={aliveFolders}
+                campaigns={aliveCampaigns}
+                voices={aliveVoices}
+                onUpdateFolder={updateFolder}
+                onDeleteFolder={deleteFolder}
+                onUpdateCampaign={updateCampaign}
+                onDeleteCampaign={deleteCampaign}
+                onAttach={attachFiles}
+                onRemoveAttachment={removeAttachment}
+                onUpdateVoice={updateVoice}
+                onDeleteVoice={deleteVoice}
+                onAddVoiceNote={addVoiceNote}
+                onDeleteVoiceNote={deleteVoiceNote}
+                onAddExample={addExample}
+                onDeleteExample={deleteExample}
+              />
+            </SidebarInset>
+          </>
+        ) : (
+          <>
+            <AppSidebar
+              prospects={inCampaign}
+              allProspects={prospects.filter((p) => !p.deletedAt)}
+              campaigns={aliveCampaigns}
+              campaignId={campaign.id}
+              voices={aliveVoices}
+              onDeleteProspect={deleteProspect}
+              onDeleteCampaign={deleteCampaign}
+              trashCount={trash.length}
+              onOpenTrash={() => openSettings({ kind: 'trash' })}
+              mailAddress={mailReady ? settings?.mail?.fromEmail : undefined}
+              onOpenSettings={() => openSettings()}
+              onSwitchCampaign={switchCampaign}
+              onEditCampaign={(id) => openSettings({ kind: 'campaign', id })}
+              onNewCampaign={() => openSettings({ kind: 'campaign', id: createCampaign() })}
+              folders={aliveFolders}
+              onEditFolder={(id) => openSettings({ kind: 'folder', id })}
+              onNewFolder={() => openSettings({ kind: 'folder', id: createFolder() })}
+              onSetVoice={setVoice}
+              onEditVoices={editVoices}
+              selectedId={selectedId}
+              onSelect={select}
+              onAdd={() => setAdding(true)}
+              filter={filter}
+              onFilter={setFilter}
+              theme={theme}
+              onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+              onOpenPalette={() => setPalette(true)}
+              onShowKeys={() => setHelp(true)}
+            />
+            <SidebarInset className="min-w-0 overflow-hidden">
+              {rightDocks && selected && view === 'email' ? (
+                <ResizablePanelGroup
+                  orientation="horizontal"
+                  className="h-full"
+                  // Fires on every drag step (unlike Panel.onResize, which waits for a
+                  // ResizeObserver), so the panel's content appears as soon as it opens.
+                  onLayoutChange={(layout) => {
+                    const open = (layout.panel ?? 0) > 0.5
+                    if (open !== rightOpen) setRightOpen(open)
+                  }}
+                >
+                  <ResizablePanel id="main" minSize={420}>
+                    {main}
+                  </ResizablePanel>
+                  <ResizableHandle />
+                  <ResizablePanel
+                    id="panel"
+                    panelRef={rightPanelRef}
+                    collapsible
+                    collapsedSize={0}
+                    defaultSize={rightOpen ? 380 : 0}
+                    minSize={300}
+                    maxSize={640}
+                  >
+                    {rightOpen && panel}
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              ) : (
+                main
+              )}
+            </SidebarInset>
+          </>
+        )}
 
         {!rightDocks && (
           <Sheet open={rightOpen && !!selected && view === 'email'} onOpenChange={setRightOpen}>
@@ -1479,31 +1580,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       </SidebarProvider>
 
       <AddCompaniesDialog open={adding} onOpenChange={setAdding} campaign={campaign} voiceName={voice.name} onAdd={addProspects} />
-      <ProfilesDialog
-        target={profiles}
-        onTarget={setProfiles}
-        folders={aliveFolders}
-        onUpdateFolder={updateFolder}
-        onCreateFolder={createFolder}
-        onDeleteFolder={deleteFolder}
-        campaigns={aliveCampaigns}
-        voices={aliveVoices}
-        onUpdateCampaign={updateCampaign}
-        onCreateCampaign={createCampaign}
-        onDeleteCampaign={deleteCampaign}
-        onAttach={attachFiles}
-        onRemoveAttachment={removeAttachment}
-        onCreateVoice={createVoice}
-        onUpdateVoice={updateVoice}
-        onDeleteVoice={deleteVoice}
-        onAddVoiceNote={addVoiceNote}
-        onDeleteVoiceNote={deleteVoiceNote}
-        onAddExample={addExample}
-        onDeleteExample={deleteExample}
-      />
       <CommandPalette open={palette} onOpenChange={setPalette} commands={commands} />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
-      {settingsDialog}
       <Toaster theme={theme} position="bottom-center" />
     </TooltipProvider>
   )

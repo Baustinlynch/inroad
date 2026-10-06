@@ -29,7 +29,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import type { Attachment, Prospect, Version } from '../data'
 import { changeCount } from '../diff'
 import { DiffText } from './DiffText'
@@ -42,6 +42,8 @@ interface Props {
   prospect: Prospect
   // "Name <address>" from the mailbox settings, or '' before they're set up.
   from: string
+  // CSS variables previewing Settings → Email style.
+  bodyStyle: CSSProperties
   voiceName: string
   queuePosition: number
   attachments: Attachment[]
@@ -195,7 +197,7 @@ export function Editor(props: Props) {
                   <DiffText a={originalText} b={bodyText} />
                 </div>
               ) : (
-                <div className={cn(regenerating && 'pointer-events-none animate-pulse opacity-40')}>
+                <div className={cn(regenerating && 'pointer-events-none animate-pulse opacity-40')} style={props.bodyStyle}>
                   <RichEditor key={p.id} value={p.body} onChange={setBody} />
                 </div>
               )}

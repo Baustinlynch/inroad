@@ -146,14 +146,15 @@
 .dark .mark-soft { background: color-mix(in oklch, var(--mark) 28%, transparent); }
 
 /* The email body */
-.email-body { font-size: 15px; line-height: 1.65; }
-.email-body p { margin: 0 0 1em; }
+/* Sizes and spacing come from Settings → Email (emailStyleVars in markdown.ts). */
+.email-body { font-family: var(--email-font, inherit); font-size: var(--email-size, 15px); line-height: var(--email-leading, 1.65); }
+.email-body p { margin: 0 0 var(--email-gap, 1em); }
 .email-body p:last-child { margin-bottom: 0; }
-.email-body ul, .email-body ol { margin: 0 0 1em; padding-left: 1.4em; }
+.email-body ul, .email-body ol { margin: 0 0 var(--email-gap, 1em); padding-left: 1.4em; }
 .email-body ul { list-style: disc; }
 .email-body ol { list-style: decimal; }
 .email-body li p { margin: 0; }
-.email-body blockquote { margin: 0 0 1em; padding-left: 1em; border-left: 3px solid var(--border); color: var(--muted-foreground); }
+.email-body blockquote { margin: 0 0 var(--email-gap, 1em); padding-left: 1em; border-left: 3px solid var(--border); color: var(--muted-foreground); }
 .email-body a { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted-foreground); cursor: text; }
 .email-body strong { font-weight: 600; }
 

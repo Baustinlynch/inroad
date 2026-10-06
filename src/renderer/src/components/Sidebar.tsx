@@ -72,7 +72,6 @@ interface Props {
   // Undefined until a mailbox is connected.
   mailAddress?: string
   onOpenSettings: () => void
-  viewingTrash: boolean
   onOpenTrash: () => void
 }
 
@@ -237,7 +236,7 @@ export function AppSidebar(props: Props) {
                       <SidebarMenuButton
                         size="lg"
                         data-prospect={p.id}
-                        isActive={!props.viewingTrash && p.id === selectedId}
+                        isActive={p.id === selectedId}
                         onClick={() => select(p.id)}
                         tooltip={`${p.company} · ${statusStyle[p.status].label}`}
                       >
@@ -300,7 +299,6 @@ export function AppSidebar(props: Props) {
                 <SidebarMenuButton
                   size="lg"
                   tooltip={props.mailAddress ?? 'Connect your mailbox'}
-                  isActive={props.viewingTrash}
                   className="data-[state=open]:bg-sidebar-accent"
                 >
                   <span className="grid size-8 shrink-0 place-items-center rounded-md bg-sidebar-accent">

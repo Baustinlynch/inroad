@@ -66,6 +66,66 @@ export const normalizeMarkdown = (md: string) => (md.trim() ? manager.serialize(
 
 export const markdownToHtml = (md: string) => (md.trim() ? generateHTML(manager.parse(md), extensions) : '')
 
+// How saved emails look. Applied as inline styles, which is what mail apps
+// respect; the editor previews the same values (see emailStyleVars).
+export interface EmailStyle {
+  font: 'default' | 'sans' | 'serif'
+  size: 'default' | 'small' | 'medium' | 'large'
+  // Space between paragraphs, lists and quotes.
+  spacing: 'none' | 'compact' | 'normal'
+  lineHeight: 'normal' | 'relaxed'
+}
+
+export const defaultEmailStyle: EmailStyle = { font: 'default', size: 'default', spacing: 'normal', lineHeight: 'normal' }
+
+// '' = leave it to the reader's mail app.
+const FONTS = { default: '', sans: "-apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif", serif: "Georgia, 'Times New Roman', serif" }
+const SIZES = { default: '', small: '13px', medium: '14px', large: '16px' }
+const GAPS = { none: '0', compact: '0.5em', normal: '1em' }
+const LEADINGS = { normal: '', relaxed: '1.5' }
+
+// The HTML that goes to the mailbox.
+export function emailHtml(md: string, style: EmailStyle = defaultEmailStyle): string {
+  const html = markdownToHtml(md)
+  if (!html) return ''
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html')
+  const root = doc.body.firstElementChild as HTMLElement
+  const gap = GAPS[style.spacing]
+  root.querySelectorAll<HTMLElement>('p, ul, ol, blockquote').forEach((el) => {
+    // Paragraphs inside list items and quotes take the container's spacing.
+    const nested = el.tagName === 'P' && !!el.parentElement?.closest('li, blockquote')
+    el.style.margin = nested || !el.nextElementSibling ? '0' : `0 0 ${gap}`
+  })
+  root.querySelectorAll<HTMLElement>('ul, ol').forEach((el) => {
+    el.style.paddingLeft = '1.4em'
+    el.style.listStyleType = el.tagName === 'OL' ? 'decimal' : 'disc'
+  })
+  root.querySelectorAll<HTMLElement>('blockquote').forEach((el) => {
+    el.style.paddingLeft = '1em'
+    el.style.borderLeft = '3px solid #ccc'
+    el.style.color = '#555'
+  })
+  // Plain links: no target/rel attributes in an email.
+  root.querySelectorAll('a').forEach((a) => {
+    a.removeAttribute('target')
+    a.removeAttribute('rel')
+  })
+  if (FONTS[style.font]) root.style.fontFamily = FONTS[style.font]
+  if (SIZES[style.size]) root.style.fontSize = SIZES[style.size]
+  if (LEADINGS[style.lineHeight]) root.style.lineHeight = LEADINGS[style.lineHeight]
+  return root.getAttribute('style') ? root.outerHTML : root.innerHTML
+}
+
+// CSS variables for previewing a style in the editor (.email-body in index.css).
+export function emailStyleVars(style: EmailStyle): Record<string, string> {
+  return {
+    '--email-font': FONTS[style.font] || 'inherit',
+    '--email-size': SIZES[style.size] || '15px',
+    '--email-gap': GAPS[style.spacing],
+    '--email-leading': LEADINGS[style.lineHeight] || '1.65',
+  }
+}
+
 // For bodies saved before markdown, which were HTML.
 export const htmlToMarkdown = (html: string) => (html.trim() ? manager.serialize(generateJSON(html, extensions)) : '')
 export const looksLikeHtml = (s: string) => /^\s*<(p|ul|ol|blockquote|div|br)\b/i.test(s)
@@ -84,7 +144,12 @@ export function markdownToText(md: string): string {
       const ordered = n.tagName === 'OL'
       blocks.push([...n.querySelectorAll(':scope > li')].map((li, i) => `${ordered ? `${i + 1}.` : '-'} ${li.textContent?.trim()}`).join('\n'))
     } else if (n instanceof HTMLElement && n.tagName === 'BLOCKQUOTE') {
-      blocks.push((n.textContent ?? '').split('\n').map((l) => `> ${l}`).join('\n'))
+      blocks.push(
+        (n.textContent ?? '')
+          .split('\n')
+          .map((l) => `> ${l}`)
+          .join('\n'),
+      )
     } else {
       blocks.push(n.textContent ?? '')
     }
