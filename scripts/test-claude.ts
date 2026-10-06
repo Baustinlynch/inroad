@@ -1,11 +1,11 @@
 // Smoke test for src/main/claude.ts against the real Agent SDK. With no
 // ANTHROPIC_API_KEY it uses this machine's Claude Code sign-in.
-//   npx tsx scripts/test-claude.ts [test|research|chat|voice]
+//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|event <name>]
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chat, configureClaude, learnVoice, researchAndDraft, testClaude } from '../src/main/claude'
+import { chat, configureClaude, isReadOnlyTool, learnVoice, lookupEvent, researchAndDraft, testClaude, writingRules } from '../src/main/claude'
 
 configureClaude({ workspace: mkdtempSync(join(tmpdir(), 'inroad-')), clientApp: 'inroad/test' })
 const key = process.env.INROAD_TEST_KEY // deliberately not ANTHROPIC_API_KEY
@@ -61,4 +61,33 @@ if (which === 'voice') {
   })
   if (!r.ok) throw new Error(r.error)
   console.log('✓ voice:', r.value)
+}
+
+if (which === 'tools') {
+  for (const t of ['slack_search_public', 'search_email', 'read_thread', 'list_folders', 'fetch', 'get-overview', 'find-tasks'])
+    assert.ok(isReadOnlyTool(t), `${t} should be allowed`)
+  for (const t of ['slack_send_message', 'slack_send_message_draft', 'draft_email', 'delete_email', 'update-tasks', 'add-comments', 'ha_call_service', 'search_and_delete'])
+    assert.ok(!isReadOnlyTool(t), `${t} should be denied`)
+  console.log('✓ connector tool filter allows reads and blocks writes')
+}
+
+if (which === 'rules') {
+  const r = await writingRules(key, {
+    emails: [
+      "Hey Sam,\n\nQuick one — are you still keen to judge at HackCBR? We're locking in the panel this week.\n\nNo stress if not, just let me know by Friday.\n\nCheers,\nIngo",
+      "Hi all,\n\nVenue's confirmed for the 14th. Doors 6pm, we'll have pizza.\n\nBring a laptop and a charger. That's it.\n\nCheers,\nIngo",
+    ],
+  })
+  if (!r.ok) throw new Error(r.error)
+  console.log('✓ writing rules:', r.value.notes)
+  assert.ok(r.value.notes.length >= 3)
+}
+
+if (which === 'event') {
+  const t = Date.now()
+  const r = await lookupEvent(key, { jobId: 'e1', name: process.argv[3] ?? 'HackCBR' }, log)
+  if (!r.ok) throw new Error(r.error)
+  console.log(`\n✓ event lookup in ${Math.round((Date.now() - t) / 1000)}s`)
+  console.log(r.value.details)
+  console.log('  sources:', r.value.sources)
 }

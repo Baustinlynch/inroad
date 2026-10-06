@@ -24,8 +24,9 @@ export interface Brief {
 export interface VoiceInput {
   name: string
   notes: string[]
-  // Recent emails as Claude drafted them vs. as the user saved them.
-  examples: { draft: string; final: string }[]
+  // Emails the user wrote: either Claude's draft and what they saved
+  // instead, or (no draft) one they pasted in.
+  examples: { draft?: string; final: string }[]
 }
 
 export interface ResearchRequest {
@@ -86,6 +87,27 @@ export interface ChatResult {
   proposals: ProposedEdit[]
 }
 
+// Onboarding: find what's known about the user's event, via the web and any
+// connectors (Slack, email…) on their Claude account.
+export interface EventLookupRequest {
+  jobId: string
+  name: string
+  // Anything else the user typed, e.g. "UNSW, November".
+  hint?: string
+}
+
+export interface EventLookupResult {
+  // Notes for the campaign: dates, place, audience, numbers, what's being asked for.
+  details: string
+  // Where each part came from, e.g. "Slack #organisers", a URL.
+  sources: string[]
+}
+
+// Onboarding: style notes drawn from emails the user wrote.
+export interface WritingRulesRequest {
+  emails: string[]
+}
+
 export interface VoiceLearnRequest {
   voiceName: string
   notes: string[]
@@ -126,11 +148,20 @@ export interface SettingsPatch {
   anthropicKey?: string
 }
 
+// A file attached to a campaign's emails. Picked files are copied into
+// Inroad's own folder, so moving or deleting the original doesn't break it.
+export interface Attachment {
+  id: string
+  name: string
+  size: number
+}
+
 export interface DraftInput {
   to: string[]
   subject: string
   html: string
   text: string
+  attachments: Attachment[]
 }
 
 // Enough to find the draft again (to replace or delete it).
@@ -160,8 +191,14 @@ export interface InroadApi {
     draft: (req: DraftRequest) => Promise<Result<DraftResult>>
     chat: (req: ChatRequest) => Promise<Result<ChatResult>>
     learnVoice: (req: VoiceLearnRequest) => Promise<Result<VoiceLearnResult>>
+    lookupEvent: (req: EventLookupRequest) => Promise<Result<EventLookupResult>>
+    writingRules: (req: WritingRulesRequest) => Promise<Result<{ notes: string[] }>>
     // Subscribe to progress for running requests; returns an unsubscribe function.
     onProgress: (cb: (p: ClaudeProgress) => void) => () => void
+  }
+  files: {
+    // Opens the system file picker; resolves to [] if cancelled.
+    pickAttachments: () => Promise<Attachment[]>
   }
   mail: {
     // Connects with the saved settings and reports the Drafts folder it found.

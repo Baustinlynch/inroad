@@ -7,6 +7,8 @@ import type {
   ClaudeProgress,
   DraftRequest,
   DraftResult,
+  EventLookupRequest,
+  EventLookupResult,
   ProposedEdit,
   ResearchRequest,
   ResearchResult,
@@ -14,6 +16,7 @@ import type {
   VoiceInput,
   VoiceLearnRequest,
   VoiceLearnResult,
+  WritingRulesRequest,
 } from '../shared/api'
 
 // Inroad drives Claude through the Claude Agent SDK (Claude Code as a library).
@@ -103,8 +106,13 @@ function parseOutput<S extends z.ZodType>(schema: S, value: unknown): z.infer<S>
 
 function voiceSection(voice: VoiceInput) {
   const notes = voice.notes.length ? voice.notes.map((n) => `- ${n}`).join('\n') : '(no notes yet)'
+  // Either Claude's draft and what the user sent instead, or an email they wrote themselves.
   const examples = voice.examples
-    .map((e, i) => `<example index="${i + 1}">\n<claude_draft>\n${e.draft}\n</claude_draft>\n<as_sent>\n${e.final}\n</as_sent>\n</example>`)
+    .map((e, i) =>
+      e.draft
+        ? `<example index="${i + 1}">\n<claude_draft>\n${e.draft}\n</claude_draft>\n<as_sent>\n${e.final}\n</as_sent>\n</example>`
+        : `<example index="${i + 1}">\n<written_by_user>\n${e.final}\n</written_by_user>\n</example>`,
+    )
     .join('\n')
   return `<voice name="${voice.name}">\n<style_notes>\n${notes}\n</style_notes>\n${examples ? `<examples>\n${examples}\n</examples>\n` : ''}</voice>`
 }
@@ -313,6 +321,90 @@ export async function learnVoice(apiKey: string | undefined, req: VoiceLearnRequ
     const out = parseOutput(VoiceSchema, result.structured_output)
     // Only remove notes that really exist.
     return { add: out.add.slice(0, 3), remove: out.remove.filter((r) => req.notes.includes(r)) }
+  })
+}
+
+// ------------------------------------------------------- event lookup
+
+// Connector tools (Slack, email…) come from the user's Claude account and
+// can do anything, so only ones that look read-only by name are allowed.
+const READ_WORDS = /^(search|read|get|list|fetch|find|query|view|lookup|retrieve|describe|show|open)$/
+const WRITE_WORDS = /^(send|post|create|delete|update|write|reply|archive|upload|schedule|add|remove|set|draft|move|complete|uncomplete|rsvp|react|edit|invite|share|publish|forward|mark|manage|import|export|restart|call|run|bulk)$/
+export function isReadOnlyTool(name: string) {
+  const words = name.toLowerCase().split(/[_\-\s]+/)
+  return words.some((w) => READ_WORDS.test(w)) && !words.some((w) => WRITE_WORDS.test(w))
+}
+
+// "mcp__claude_ai_Slack__slack_search_public" → "Slack"
+const connectorName = (tool: string) => tool.split('__')[1]?.replace(/^claude_ai_/, '').replace(/_/g, ' ') ?? tool
+
+const EventSchema = z.object({
+  details: z
+    .string()
+    .describe(
+      'Plain-text notes about the event for writing outreach emails: what it is, dates, place, who attends and how many, history and past numbers, what the organisers are asking partners for (tiers, prices, perks), who runs it, links. Short lines, no markdown headings. Say "unknown" rather than guessing.',
+    ),
+  sources: z.array(z.string()).describe('Where the details came from, e.g. "Slack #sponsorship", "Email from Sam, 3 Sep", or a URL.'),
+})
+
+export async function lookupEvent(apiKey: string | undefined, req: EventLookupRequest, emit: Emit): Promise<Result<EventLookupResult>> {
+  return guard(async () => {
+    emit({ jobId: req.jobId, kind: 'step', text: `Looking for “${req.name}”` })
+    const result = await run(
+      `Event: ${req.name}${req.hint ? `\nWhat the user added: ${req.hint}` : ''}`,
+      baseOptions(apiKey, {
+        systemPrompt: `The user organises the event named below and is setting up an app that writes outreach emails (sponsors, venues, partners) for it. Find what's known about the event so they don't have to type it out.
+
+Look in their connected tools first: search their Slack, email, docs, notes or task manager for the event name and read the most relevant threads or documents. Then check the web for a public page. Only use tools to read and search; never send, post, create or change anything. Stop once you have a clear picture; a dozen or so tool calls is plenty.
+
+Only report what you found. If sources disagree, prefer the most recent and say so. If you find nothing, say that in the details.`,
+        tools: ['WebSearch', 'WebFetch', 'ToolSearch'],
+        allowedTools: ['WebSearch', 'WebFetch', 'ToolSearch'],
+        // Connector tools come to canUseTool instead of being auto-denied.
+        permissionMode: 'default',
+        canUseTool: async (toolName, input) =>
+          toolName.startsWith('mcp__') && isReadOnlyTool(toolName.split('__').at(-1) ?? '')
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: 'Inroad only lets you read and search here, not change anything.' },
+        effort: 'medium',
+        maxTurns: 30,
+        ...structured(EventSchema),
+      }),
+      (m) => {
+        if (m.type !== 'assistant') return
+        for (const block of m.message.content) {
+          if (block.type !== 'tool_use') continue
+          const input = block.input as { query?: string; url?: string }
+          if (block.name === 'WebSearch' && input.query) emit({ jobId: req.jobId, kind: 'step', text: `Searched the web for “${input.query}”` })
+          else if (block.name === 'WebFetch' && input.url) emit({ jobId: req.jobId, kind: 'step', text: `Read ${input.url.replace(/^https?:\/\//, '')}` })
+          else if (block.name.startsWith('mcp__')) emit({ jobId: req.jobId, kind: 'step', text: `Checked ${connectorName(block.name)}` })
+        }
+      },
+    )
+    return parseOutput(EventSchema, result.structured_output)
+  })
+}
+
+// ----------------------------------------------- writing rules (onboarding)
+
+const RulesSchema = z.object({
+  notes: z.array(z.string()).describe('5–8 short, imperative style notes, most important first.'),
+})
+
+export async function writingRules(apiKey: string | undefined, req: WritingRulesRequest): Promise<Result<{ notes: string[] }>> {
+  return guard(async () => {
+    const emails = req.emails.map((e, i) => `<email index="${i + 1}">\n${e.trim()}\n</email>`).join('\n')
+    const result = await run(
+      emails,
+      baseOptions(apiKey, {
+        systemPrompt: `These are emails one person wrote. Write a short style guide another writer could follow to sound like them in outreach emails: tone and formality, length and paragraph shape, how they open and sign off, sentence habits, words and phrases they use or avoid, spelling conventions (e.g. Australian or US). Only include what the emails actually show; ignore their specific content.`,
+        tools: [],
+        effort: 'medium',
+        maxTurns: 4,
+        ...structured(RulesSchema),
+      }),
+    )
+    return { notes: parseOutput(RulesSchema, result.structured_output).notes.slice(0, 10) }
   })
 }
 

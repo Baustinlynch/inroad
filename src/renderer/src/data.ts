@@ -1,6 +1,6 @@
-import type { Brief, DraftRef, Recipient } from '../../shared/api'
+import type { Attachment, Brief, DraftRef, Recipient } from '../../shared/api'
 
-export type { Brief, Recipient }
+export type { Attachment, Brief, Recipient }
 
 export type Status = 'queued' | 'researching' | 'drafted' | 'edited' | 'saved' | 'failed'
 
@@ -73,7 +73,8 @@ export interface Campaign {
   // Freeform: what you're asking for, context, what to research, tone. Fed to
   // both the research agent and the drafting prompt for every email.
   notes: string
-  attachments: string[]
+  // Added to every email in this campaign when it's saved to Drafts.
+  attachments: Attachment[]
   // Which voice profile drafts in this campaign are written in.
   voiceId: string
   deletedAt?: number
@@ -84,12 +85,22 @@ export interface Voice {
   name: string
   description: string
   notes: { text: string; fresh: boolean; deletedAt?: number }[]
-  // Recent emails as Claude drafted them and as you saved them (newest last).
-  // Shown to Claude as examples of how you actually write.
-  examples?: { draft: string; final: string }[]
+  // Shown to Claude as examples of how you actually write (oldest first).
+  examples?: VoiceExample[]
   deletedAt?: number
 }
 
+export interface VoiceExample {
+  id: string
+  at: number
+  // Claude's draft, when this came from saving an edited email. Pasted
+  // emails have none.
+  draft?: string
+  final: string
+  deletedAt?: number
+}
+
+// How many saved edits Claude sees as examples (the newest). Pasted emails are always included.
 export const MAX_VOICE_EXAMPLES = 4
 
 export const firstRunCampaign = (voiceId: string): Campaign => ({ id: crypto.randomUUID(), name: 'Sponsors', notes: '', attachments: [], voiceId })

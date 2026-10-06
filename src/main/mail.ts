@@ -48,7 +48,8 @@ async function findDrafts(client: ImapFlow): Promise<string> {
 
 export const testMail = (creds: MailCreds) => run(creds, async (client) => ({ draftsMailbox: await findDrafts(client) }))
 
-export function saveDraft(creds: MailCreds, draft: DraftInput): Promise<Result<DraftRef>> {
+// files: the draft's attachments, already resolved to paths on disk.
+export function saveDraft(creds: MailCreds, draft: DraftInput, files: { filename: string; path: string }[] = []): Promise<Result<DraftRef>> {
   return run(creds, async (client) => {
     const mailbox = await findDrafts(client)
     // Our own Message-ID lets us find the draft later, even on servers that
@@ -61,6 +62,7 @@ export function saveDraft(creds: MailCreds, draft: DraftInput): Promise<Result<D
       subject: draft.subject,
       html: draft.html,
       text: draft.text,
+      attachments: files,
       messageId,
     })
       .compile()

@@ -17,11 +17,16 @@ const api: InroadApi = {
     draft: (req) => ipcRenderer.invoke('claude:draft', req),
     chat: (req) => ipcRenderer.invoke('claude:chat', req),
     learnVoice: (req) => ipcRenderer.invoke('claude:learnVoice', req),
+    lookupEvent: (req) => ipcRenderer.invoke('claude:lookupEvent', req),
+    writingRules: (req) => ipcRenderer.invoke('claude:writingRules', req),
     onProgress: (cb) => {
       const listener = (_e: Electron.IpcRendererEvent, p: ClaudeProgress) => cb(p)
       ipcRenderer.on('claude:progress', listener)
       return () => ipcRenderer.removeListener('claude:progress', listener)
     },
+  },
+  files: {
+    pickAttachments: () => ipcRenderer.invoke('files:pickAttachments'),
   },
   mail: {
     test: () => ipcRenderer.invoke('mail:test'),

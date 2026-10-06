@@ -1,8 +1,9 @@
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import type { ClaudeProgress, Result } from '../shared/api'
+import type { ClaudeProgress, DraftInput, Result } from '../shared/api'
 import * as claude from './claude'
+import { attachmentFile, pickAttachments } from './files'
 import { deleteDraft, saveDraft, testMail, type MailCreds } from './mail'
 import { getPublicSettings, getSecrets, updateSettings } from './settings'
 import { loadState, saveState } from './store'
@@ -80,8 +81,21 @@ app.whenReady().then(() => {
   ipcMain.handle('claude:draft', async (_e, req) => claude.draft(await key(), req))
   ipcMain.handle('claude:chat', async (e, req) => claude.chat(await key(), req, emitTo(e.sender)))
   ipcMain.handle('claude:learnVoice', async (_e, req) => claude.learnVoice(await key(), req))
+  ipcMain.handle('claude:lookupEvent', async (e, req) => claude.lookupEvent(await key(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:writingRules', async (_e, req) => claude.writingRules(await key(), req))
   ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))
-  ipcMain.handle('mail:saveDraft', (_e, draft) => withMail((c) => saveDraft(c, draft)))
+  ipcMain.handle('mail:saveDraft', (_e, draft: DraftInput) =>
+    withMail(async (c) => {
+      let files
+      try {
+        files = await Promise.all((draft.attachments ?? []).map(attachmentFile))
+      } catch (err) {
+        return { ok: false, error: (err as Error).message }
+      }
+      return saveDraft(c, draft, files)
+    }),
+  )
+  ipcMain.handle('files:pickAttachments', (e) => pickAttachments(BrowserWindow.fromWebContents(e.sender)))
   ipcMain.handle('mail:deleteDraft', (_e, ref) => withMail((c) => deleteDraft(c, ref)))
 
   createWindow()

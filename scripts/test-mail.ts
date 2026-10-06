@@ -4,6 +4,9 @@
 //     greenmail/standalone
 //   npx tsx scripts/test-mail.ts
 import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ImapFlow } from 'imapflow'
 import { deleteDraft, saveDraft, testMail, type MailCreds } from '../src/main/mail'
 
@@ -38,7 +41,13 @@ assert.deepEqual(t, { ok: true, value: { draftsMailbox: 'Drafts' } })
 console.log('✓ test connection finds Drafts')
 
 const before = await countDrafts()
-const saved = await saveDraft(creds, { to: ['priya@lumenlabs.example'], subject: 'Hello', html: '<p>Hi <strong>Priya</strong></p>', text: 'Hi Priya' })
+const prospectus = join(mkdtempSync(join(tmpdir(), 'inroad-')), 'Prospectus.pdf')
+writeFileSync(prospectus, '%PDF-1.4 test')
+const saved = await saveDraft(
+  creds,
+  { to: ['priya@lumenlabs.example'], subject: 'Hello', html: '<p>Hi <strong>Priya</strong></p>', text: 'Hi Priya', attachments: [] },
+  [{ filename: 'Prospectus.pdf', path: prospectus }],
+)
 assert.ok(saved.ok, !saved.ok ? saved.error : '')
 assert.equal(await countDrafts(), before! + 1)
 console.log('✓ saveDraft appends to Drafts', saved.value)
@@ -53,10 +62,11 @@ assert.ok(msg && msg.flags?.has('\\Draft'))
 const src = msg.source!.toString()
 assert.match(src, /text\/html/)
 assert.match(src, /text\/plain/)
+assert.match(src, /filename="?Prospectus\.pdf/)
 assert.equal(msg.envelope?.subject, 'Hello')
 lock.release()
 await c.logout()
-console.log('✓ draft has \\Draft flag, HTML + text parts, and subject')
+console.log('✓ draft has \\Draft flag, HTML + text parts, subject and the attachment')
 
 const del = await deleteDraft(creds, saved.value)
 assert.deepEqual(del, { ok: true, value: null })

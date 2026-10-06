@@ -1,3 +1,4 @@
+import type { EventInfo } from './components/EventFields'
 import { firstRunCampaign, firstRunVoice, type Campaign, type Prospect, type Voice } from './data'
 
 // Everything worth keeping between launches. UI-only state (open panels,
@@ -9,12 +10,25 @@ export interface SavedState {
   voices: Voice[]
   campaignId: string
   selectedId: string
+  // Shared by every campaign. Missing in saves from before onboarding existed.
+  event?: EventInfo
+  // False until the first-run setup is finished (or skipped).
+  onboarded?: boolean
 }
 
 export function firstRun(): SavedState {
   const voice = firstRunVoice()
   const campaign = firstRunCampaign(voice.id)
-  return { version: 1, prospects: [], campaigns: [campaign], voices: [voice], campaignId: campaign.id, selectedId: '' }
+  return {
+    version: 1,
+    prospects: [],
+    campaigns: [campaign],
+    voices: [voice],
+    campaignId: campaign.id,
+    selectedId: '',
+    event: { name: '', details: '' },
+    onboarded: false,
+  }
 }
 
 // Claude work doesn't survive a restart: research that was running goes back
@@ -22,6 +36,9 @@ export function firstRun(): SavedState {
 function resume(state: SavedState): SavedState {
   return {
     ...state,
+    // Older saves stored attachments as bare file names with no file behind them.
+    campaigns: state.campaigns.map((c) => ({ ...c, attachments: c.attachments.filter((a) => typeof a === 'object') })),
+    voices: state.voices.map((v) => ({ ...v, examples: v.examples?.map((e) => ({ ...e, id: e.id ?? crypto.randomUUID(), at: e.at ?? Date.now() })) })),
     prospects: state.prospects.map((p) => ({
       ...p,
       status: p.status === 'researching' ? 'queued' : p.status,

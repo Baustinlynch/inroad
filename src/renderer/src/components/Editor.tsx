@@ -30,7 +30,7 @@ import {
   X,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
-import type { Prospect, Version } from '../data'
+import type { Attachment, Prospect, Version } from '../data'
 import { changeCount } from '../diff'
 import { htmlToText } from '../richtext'
 import { DiffText } from './DiffText'
@@ -45,7 +45,7 @@ interface Props {
   from: string
   voiceName: string
   queuePosition: number
-  attachments: string[]
+  attachments: Attachment[]
   showDiff: boolean
   onToggleDiff: () => void
   regenerating: boolean
@@ -203,9 +203,9 @@ export function Editor(props: Props) {
               <Separator className="mt-6 mb-3" />
               <div className="flex flex-wrap items-center gap-2">
                 {attachments.map((f) => (
-                  <Badge key={f} variant="outline" className="gap-1.5 font-normal">
+                  <Badge key={f.id} variant="outline" className="gap-1.5 font-normal">
                     <Paperclip className="size-3" />
-                    {f}
+                    {f.name}
                   </Badge>
                 ))}
                 <span className="text-xs text-muted-foreground">

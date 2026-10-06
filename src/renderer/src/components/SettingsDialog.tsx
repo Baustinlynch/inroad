@@ -301,7 +301,7 @@ export function SettingsDialog({
           <TabsContent value="data" className="mt-3 grid gap-3">
             <p className="text-sm text-muted-foreground">
               Everything you write in Inroad is stored on this computer. Starting fresh permanently removes all organisations, emails, chats, campaigns
-              and voices, including Deleted items. Your mailbox and Claude settings stay, and nothing in your mailbox is touched.
+              and voices, including Deleted items, then runs setup again. Your mailbox and Claude settings stay, and nothing in your mailbox is touched.
             </p>
             <DialogFooter>
               <AlertDialog>

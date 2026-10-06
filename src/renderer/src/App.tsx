@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import {
+  CalendarDays,
   FileText,
   Flag,
   GitCompare,
@@ -35,11 +36,13 @@ import { TrashView, type TrashItem } from './components/TrashView'
 import { AppSidebar, inFilter, type Filter } from './components/Sidebar'
 import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
-import { MAX_VOICE_EXAMPLES, type Campaign, type ChatMsg, type ChatThread, type Prospect, type Version, type Voice } from './data'
+import { MAX_VOICE_EXAMPLES, type Attachment, type Campaign, type ChatMsg, type ChatThread, type Prospect, type Version, type Voice, type VoiceExample } from './data'
 import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
 import { firstRun, persist, type SavedState } from './persist'
 import { htmlHasText, htmlToText, replaceText, textToHtml } from './richtext'
 import { SettingsDialog } from './components/SettingsDialog'
+import type { EventInfo } from './components/EventFields'
+import { Onboarding, type OnboardingResult } from './components/Onboarding'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
 
 const MAX_CONCURRENT = 3
@@ -65,7 +68,7 @@ interface VoiceChange {
   at: number
   add: string[]
   remove: string[]
-  example: { draft: string; final: string }
+  example: VoiceExample
 }
 
 function loadTheme(): Theme {
@@ -84,11 +87,14 @@ export default function App({ saved }: { saved: SavedState }) {
   const [view, setView] = useState<'email' | 'trash'>('email')
   const [campaignId, setCampaignId] = useState(saved.campaignId)
   const [selectedId, setSelectedId] = useState(saved.selectedId)
+  const [event, setEvent] = useState<EventInfo>(saved.event ?? { name: '', details: '' })
+  // Saves from before onboarding existed count as onboarded.
+  const [onboarded, setOnboarded] = useState(saved.onboarded !== false)
 
   // Persist to disk (Electron only) whenever the saved state changes.
   useEffect(() => {
-    persist({ version: 1, prospects, campaigns, voices, campaignId, selectedId })
-  }, [prospects, campaigns, voices, campaignId, selectedId])
+    persist({ version: 1, prospects, campaigns, voices, campaignId, selectedId, event, onboarded })
+  }, [prospects, campaigns, voices, campaignId, selectedId, event, onboarded])
   const [tab, setTab] = useState<Tab>('chat')
   const [filter, setFilter] = useState<Filter>('all')
   const [showDiff, setShowDiff] = useState(false)
@@ -158,6 +164,8 @@ export default function App({ saved }: { saved: SavedState }) {
   voicesRef.current = voices
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const eventRef = useRef(event)
+  eventRef.current = event
 
   // Streamed progress (research steps, chat text) is routed to whoever started the job.
   const jobs = useRef(new Map<string, (e: ClaudeProgress) => void>())
@@ -168,17 +176,29 @@ export default function App({ saved }: { saved: SavedState }) {
     const c = campaignsRef.current.find((c) => c.id === campaignId)
     return vs.find((v) => v.id === c?.voiceId) ?? vs[0]
   }
-  const voiceInput = (v: Voice): VoiceInput => ({
-    name: v.name,
-    notes: v.notes.filter((n) => !n.deletedAt).map((n) => n.text),
-    examples: v.examples ?? [],
-  })
-  const claudeContext = (p: Prospect) => ({
-    company: p.company,
-    campaignNotes: campaignsRef.current.find((c) => c.id === p.campaignId)?.notes ?? '',
-    voice: voiceInput(voiceOf(p.campaignId)),
-    senderName: settingsRef.current?.mail?.fromName ?? '',
-  })
+  const voiceInput = (v: Voice): VoiceInput => {
+    const alive = (v.examples ?? []).filter((e) => !e.deletedAt)
+    const pasted = alive.filter((e) => !e.draft)
+    const learned = alive.filter((e) => e.draft).slice(-MAX_VOICE_EXAMPLES)
+    return {
+      name: v.name,
+      notes: v.notes.filter((n) => !n.deletedAt).map((n) => n.text),
+      examples: [...pasted, ...learned].map(({ draft, final }) => ({ draft, final })),
+    }
+  }
+  const claudeContext = (p: Prospect) => {
+    const c = campaignsRef.current.find((c) => c.id === p.campaignId)
+    // Claude should know what's attached so the email can mention it.
+    const files = c?.attachments.length ? `\n\nAttached to every email: ${c.attachments.map((a) => a.name).join(', ')}` : ''
+    const ev = eventRef.current
+    const about = ev.name || ev.details ? `About the event${ev.name ? ` (${ev.name})` : ''}:\n${ev.details}\n\nThis campaign:\n` : ''
+    return {
+      company: p.company,
+      campaignNotes: about + (c?.notes ?? '') + files,
+      voice: voiceInput(voiceOf(p.campaignId)),
+      senderName: settingsRef.current?.mail?.fromName ?? '',
+    }
+  }
 
   // Research runner: pulls from the queue so at most MAX_CONCURRENT run at once.
   const researching = useRef(new Set<string>())
@@ -398,7 +418,12 @@ export default function App({ saved }: { saved: SavedState }) {
       const next = rest[Math.min(i, rest.length - 1)]
       if (next) select(next.id)
     }
-    softDelete(p.company, (at) => setProspectDeleted(id, at), undefined, () => select(id))
+    softDelete(
+      p.company,
+      (at) => setProspectDeleted(id, at),
+      undefined,
+      () => select(id),
+    )
   }
 
   const deleteCampaign = (id: string) => {
@@ -406,7 +431,12 @@ export default function App({ saved }: { saved: SavedState }) {
     if (!c || aliveCampaigns.length < 2) return notify({ text: 'You need at least one campaign' })
     const other = aliveCampaigns.find((x) => x.id !== id)!
     if (id === campaign.id) switchCampaign(other.id)
-    softDelete(c.name || 'Untitled campaign', (at) => setCampaignDeleted(id, at), undefined, () => switchCampaign(id))
+    softDelete(
+      c.name || 'Untitled campaign',
+      (at) => setCampaignDeleted(id, at),
+      undefined,
+      () => switchCampaign(id),
+    )
   }
 
   const deleteVoice = (id: string) => {
@@ -417,6 +447,72 @@ export default function App({ saved }: { saved: SavedState }) {
   }
 
   const deleteVoiceNote = (voiceId: string, text: string) => softDelete('a style note', (at) => setNoteDeleted(voiceId, text, at))
+
+  const updateVoice = (id: string, patch: Partial<Voice>) => setVoices((vs) => vs.map((v) => (v.id === id ? { ...v, ...patch } : v)))
+
+  const createVoice = () => {
+    const v: Voice = { id: crypto.randomUUID(), name: '', description: '', notes: [], examples: [] }
+    const apply = () => setVoices((vs) => [...vs.filter((x) => x.id !== v.id), v])
+    apply()
+    record('Created a voice', undefined, () => setVoices((vs) => vs.filter((x) => x.id !== v.id)), apply)
+    return v.id
+  }
+
+  const addVoiceNote = (voiceId: string, text: string) => {
+    const note = { text, fresh: false }
+    const apply = () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, notes: [...v.notes, note] } : v)))
+    apply()
+    record('Added a style note', undefined, () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, notes: v.notes.filter((n) => n !== note) } : v))), apply)
+  }
+
+  const setExampleDeleted = (voiceId: string, exampleId: string, at?: number) =>
+    setVoices((vs) => vs.map((v) => (v.id !== voiceId ? v : { ...v, examples: v.examples?.map((e) => (e.id === exampleId ? { ...e, deletedAt: at } : e)) })))
+
+  const addExample = (voiceId: string, final: string) => {
+    const example: VoiceExample = { id: crypto.randomUUID(), at: Date.now(), final }
+    const apply = () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, examples: [...(v.examples ?? []), example] } : v)))
+    apply()
+    record(
+      'Added an example email',
+      undefined,
+      () => setVoices((vs) => vs.map((v) => (v.id === voiceId ? { ...v, examples: v.examples?.filter((e) => e.id !== example.id) } : v))),
+      apply,
+    )
+  }
+
+  const deleteExample = (voiceId: string, exampleId: string) => softDelete('an example email', (at) => setExampleDeleted(voiceId, exampleId, at))
+
+  const setAttachments = (campaignId: string, fn: (a: Attachment[]) => Attachment[]) =>
+    setCampaigns((cs) => cs.map((c) => (c.id === campaignId ? { ...c, attachments: fn(c.attachments) } : c)))
+
+  const attachFiles = async (campaignId: string) => {
+    const files = await window.api?.files.pickAttachments()
+    if (!files?.length) return
+    const ids = files.map((f) => f.id)
+    const apply = () => setAttachments(campaignId, (as) => [...as.filter((a) => !ids.includes(a.id)), ...files])
+    apply()
+    record(
+      `Attached ${files.length === 1 ? files[0].name : `${files.length} files`}`,
+      undefined,
+      () => setAttachments(campaignId, (as) => as.filter((a) => !ids.includes(a.id))),
+      apply,
+    )
+  }
+
+  const removeAttachment = (campaignId: string, id: string) => {
+    const c = campaigns.find((x) => x.id === campaignId)
+    const i = c?.attachments.findIndex((a) => a.id === id) ?? -1
+    if (!c || i < 0) return
+    const file = c.attachments[i]
+    const apply = () => setAttachments(campaignId, (as) => as.filter((a) => a.id !== id))
+    apply()
+    record(
+      `Removed ${file.name}`,
+      undefined,
+      () => setAttachments(campaignId, (as) => [...as.slice(0, i), file, ...as.slice(i)]),
+      apply,
+    )
+  }
 
   const deleteVersion = (v: Version) => {
     if (!selected) return
@@ -456,13 +552,16 @@ export default function App({ saved }: { saved: SavedState }) {
           return {
             ...v,
             notes: v.notes.filter((n) => !(n.fresh && c.add.includes(n.text))).map((n) => (n.deletedAt === c.at ? { ...n, deletedAt: undefined } : n)),
-            examples: examples.filter((e) => e !== c.example),
+            examples: examples.filter((e) => e.id !== c.example.id),
           }
         return {
           ...v,
           // Contradicted notes go to Deleted items rather than vanishing.
-          notes: [...v.notes.map((n) => (!n.deletedAt && c.remove.includes(n.text) ? { ...n, deletedAt: c.at } : n)), ...c.add.map((text) => ({ text, fresh: true }))],
-          examples: [...examples, c.example].slice(-MAX_VOICE_EXAMPLES),
+          notes: [
+            ...v.notes.map((n) => (!n.deletedAt && c.remove.includes(n.text) ? { ...n, deletedAt: c.at } : n)),
+            ...c.add.map((text) => ({ text, fresh: true })),
+          ],
+          examples: [...examples, c.example],
         }
       }),
     )
@@ -471,19 +570,18 @@ export default function App({ saved }: { saved: SavedState }) {
   // example even if extracting notes fails.
   const learnVoice = async (p: Prospect): Promise<VoiceChange> => {
     const v = voiceOf(p.campaignId)
-    const example = { draft: htmlToText(p.originalBody), final: htmlToText(p.body) }
+    const example: VoiceExample = { id: crypto.randomUUID(), at: Date.now(), draft: htmlToText(p.originalBody), final: htmlToText(p.body) }
     const base: VoiceChange = { voiceId: v.id, at: Date.now(), add: [], remove: [], example }
     if (!window.api) return base
-    const res = await window.api.claude.learnVoice({ voiceName: v.name, notes: voiceInput(v).notes, ...example })
+    const res = await window.api.claude.learnVoice({ voiceName: v.name, notes: voiceInput(v).notes, draft: example.draft!, final: example.final })
     return res.ok ? { ...base, ...res.value } : base
   }
 
-  const mailReady = !window.api || (!!settings?.mail && settings.hasMailPassword)
+  const mailReady = !!settings?.mail && !!settings.hasMailPassword
 
   const save = () => {
     if (!selected?.originalBody) return
-    if (!mailReady)
-      return notify({ text: 'Connect your mailbox to save drafts', action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
+    if (!mailReady) return notify({ text: 'Connect your mailbox to save drafts', action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
     const { id: pid, status: prev, company, draftRef: prevRef } = selected
     const edited = selected.body !== selected.originalBody
     const versionId = crypto.randomUUID()
@@ -497,7 +595,8 @@ export default function App({ saved }: { saved: SavedState }) {
       sync.committed = true
       const p = get(pid)
       if (!p || !window.api) return
-      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: p.body, text: htmlToText(p.body) })
+      const attachments = campaignsRef.current.find((c) => c.id === p.campaignId)?.attachments ?? []
+      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: p.body, text: htmlToText(p.body), attachments })
       if (!res.ok) {
         update(pid, (q) => ({ ...q, status: prev === 'saved' ? 'edited' : prev, versions: q.versions.filter((v) => v.id !== versionId) }))
         return notify({ text: `Couldn’t save ${company} to Drafts: ${res.error}`, action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
@@ -579,7 +678,9 @@ export default function App({ saved }: { saved: SavedState }) {
     const before = { body: q.body, originalBody: q.originalBody, subject: q.subject, status: q.status }
     // Keep your edits in history so regenerating never loses work.
     const added: Version[] = [
-      ...(q.versions.some((v) => v.html === q.body) ? [] : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), html: q.body }]),
+      ...(q.versions.some((v) => v.html === q.body)
+        ? []
+        : [{ id: crypto.randomUUID(), label: 'Your edits', by: 'you' as const, at: Date.now(), html: q.body }]),
       { id: crypto.randomUUID(), label: 'Regenerated draft', by: 'claude', at: Date.now(), html },
     ]
     const apply = () =>
@@ -620,7 +721,10 @@ export default function App({ saved }: { saved: SavedState }) {
   }
 
   const findProposal = (p: Prospect, msgId: string, propId: string) =>
-    p.chats.flatMap((c) => c.messages).find((m) => m.id === msgId)?.proposals?.find((x) => x.id === propId)
+    p.chats
+      .flatMap((c) => c.messages)
+      .find((m) => m.id === msgId)
+      ?.proposals?.find((x) => x.id === propId)
 
   const setProposalState = (pid: string, msgId: string, propId: string, state: 'pending' | 'accepted' | 'rejected') =>
     update(pid, (p) => ({
@@ -752,6 +856,8 @@ export default function App({ saved }: { saved: SavedState }) {
   // Re-bound every render so the handler always sees current state.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Setup has its own controls; ⌘, still opens Settings to connect the mailbox.
+      if (!onboarded && !((e.metaKey || e.ctrlKey) && e.key === ',')) return
       const mod = e.metaKey || e.ctrlKey
       const el = e.target as HTMLElement
       const typing = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
@@ -885,6 +991,19 @@ export default function App({ saved }: { saved: SavedState }) {
           purge: () => setVoices((vs) => vs.map((x) => (x.id !== v.id ? x : { ...x, notes: x.notes.filter((y) => y.text !== n.text) }))),
         })),
     ),
+    ...voices.flatMap((v) =>
+      (v.examples ?? [])
+        .filter((e) => e.deletedAt)
+        .map<TrashEntry>((e) => ({
+          key: `example:${v.id}:${e.id}`,
+          kind: 'example',
+          label: e.final.split('\n').find((l) => l.trim()) ?? 'Example email',
+          context: `${v.name} voice`,
+          deletedAt: e.deletedAt!,
+          set: (at) => setExampleDeleted(v.id, e.id, at),
+          purge: () => setVoices((vs) => vs.map((x) => (x.id !== v.id ? x : { ...x, examples: x.examples?.filter((y) => y.id !== e.id) }))),
+        })),
+    ),
     ...prospects.flatMap((p) =>
       p.chats
         .filter((c) => c.deletedAt)
@@ -918,7 +1037,12 @@ export default function App({ saved }: { saved: SavedState }) {
     const entry = trashEntry(item)
     if (!entry) return
     entry.set(undefined)
-    record(`Restored ${item.label}`, undefined, () => entry.set(item.deletedAt), () => entry.set(undefined))
+    record(
+      `Restored ${item.label}`,
+      undefined,
+      () => entry.set(item.deletedAt),
+      () => entry.set(undefined),
+    )
   }
 
   // Permanent: not on the undo stack, which is why the UI confirms first.
@@ -971,9 +1095,28 @@ export default function App({ saved }: { saved: SavedState }) {
     { id: 'settings', group: 'Actions', label: 'Settings', icon: <Settings />, shortcut: '⌘,', run: () => setSettingsOpen(true) },
     { id: 'new-chat', group: 'Actions', label: 'New chat', icon: <MessageSquarePlus />, run: newChat },
     ...(selected && activeChat(selected)
-      ? [{ id: 'delete-chat', group: 'Actions' as const, label: `Delete chat “${activeChat(selected)!.title}”`, icon: <Trash2 />, run: () => deleteChat(activeChat(selected)!.id) }]
+      ? [
+          {
+            id: 'delete-chat',
+            group: 'Actions' as const,
+            label: `Delete chat “${activeChat(selected)!.title}”`,
+            icon: <Trash2 />,
+            run: () => deleteChat(activeChat(selected)!.id),
+          },
+        ]
       : []),
-    ...(selected ? [{ id: 'delete-org', group: 'Actions' as const, label: `Delete ${selected.company}`, icon: <Trash2 />, shortcut: '⌫', run: () => deleteProspect(selected.id) }] : []),
+    ...(selected
+      ? [
+          {
+            id: 'delete-org',
+            group: 'Actions' as const,
+            label: `Delete ${selected.company}`,
+            icon: <Trash2 />,
+            shortcut: '⌫',
+            run: () => deleteProspect(selected.id),
+          },
+        ]
+      : []),
     { id: 'trash', group: 'Actions', label: `Deleted items${trash.length ? ` (${trash.length})` : ''}`, icon: <Trash2 />, run: () => setView('trash') },
     ...aliveVoices
       .filter((v) => v.id !== voice.id)
@@ -994,6 +1137,7 @@ export default function App({ saved }: { saved: SavedState }) {
         icon: <Flag />,
         run: () => switchCampaign(c.id),
       })),
+    { id: 'event', group: 'Campaigns & voices', label: 'Edit event details', icon: <CalendarDays />, run: () => setProfiles({ kind: 'event' }) },
     { id: 'campaign', group: 'Campaigns & voices', label: 'Edit campaign notes', icon: <Flag />, run: () => setProfiles({ kind: 'campaign', id: campaignId }) },
     {
       id: 'new-campaign',
@@ -1030,7 +1174,10 @@ export default function App({ saved }: { saved: SavedState }) {
 
   // A suggestion as Claude will see it in the transcript of earlier turns.
   const describe = (m: ChatMsg) =>
-    [m.text, ...(m.proposals ?? []).map((x) => `[Suggested replacing “${x.old}” with “${x.new}” — ${x.state === 'pending' ? 'not yet decided' : x.state}]`)].join('\n')
+    [
+      m.text,
+      ...(m.proposals ?? []).map((x) => `[Suggested replacing “${x.old}” with “${x.new}” — ${x.state === 'pending' ? 'not yet decided' : x.state}]`),
+    ].join('\n')
 
   const sendChat = async (text: string) => {
     if (!selected) return
@@ -1083,6 +1230,18 @@ export default function App({ saved }: { saved: SavedState }) {
 
   // Settings → Data. Not undoable (the dialog confirms first); research still
   // running finishes into nothing, and saves waiting to reach the mailbox are cancelled.
+  // Fills in the blank first-run campaign and voice from what setup collected.
+  const finishOnboarding = (r: OnboardingResult) => {
+    setEvent(r.event)
+    updateCampaign(campaign.id, { name: r.campaign.name.trim(), notes: r.campaign.notes.trim() })
+    updateVoice(voice.id, {
+      notes: [...voice.notes, ...r.rules.map((text) => ({ text, fresh: false }))],
+      examples: [...(voice.examples ?? []), ...r.emails.map((final) => ({ id: crypto.randomUUID(), at: Date.now(), final }))],
+    })
+    setOnboarded(true)
+    setAdding(true)
+  }
+
   const startFresh = () => {
     const fresh = firstRun()
     Object.values(commitTimers.current).forEach(clearTimeout)
@@ -1094,6 +1253,8 @@ export default function App({ saved }: { saved: SavedState }) {
     setVoices(fresh.voices)
     setCampaignId(fresh.campaignId)
     setSelectedId(fresh.selectedId)
+    setEvent(fresh.event!)
+    setOnboarded(false)
     setView('email')
     setSettingsOpen(false)
     notify({ text: 'Started fresh' })
@@ -1115,49 +1276,68 @@ export default function App({ saved }: { saved: SavedState }) {
     />
   )
 
-  const main = view === 'trash' ? (
-    <TrashView items={trash} onRestore={restoreItem} onPurge={purgeItem} onEmpty={emptyTrash} />
-  ) : selected ? (
-    <Editor
-      prospect={selected}
-      from={settings?.mail?.fromEmail ? `${settings.mail.fromName ? `${settings.mail.fromName} ` : ''}<${settings.mail.fromEmail}>` : ''}
-      voiceName={voice.name}
-      attachments={campaign.attachments}
-      queuePosition={queuePosition}
-      showDiff={showDiff}
-      onToggleDiff={() => setShowDiff((v) => !v)}
-      regenerating={regeneratingId === selected.id}
-      onRegenerate={regenerate}
-      onRestoreVersion={restoreVersion}
-      onDeleteVersion={deleteVersion}
-      onChange={(patch) => (patch.to ? setRecipients(patch.to) : update(selected.id, (p) => ({ ...p, ...patch })))}
-      onRetry={(website) => update(selected.id, (p) => ({ ...p, status: 'queued', progress: [], error: undefined, domain: website || p.domain }))}
-      onSave={save}
-      panelTab={rightOpen ? tab : null}
-      showPanelButtons={!(rightDocks && rightOpen)}
-      pendingSuggestions={(activeChat(selected)?.messages ?? []).flatMap((m) => m.proposals ?? []).filter((x) => x.state === 'pending').length}
-      onPanel={togglePanel}
-    />
-  ) : (
-    <div className="flex h-full flex-col items-start justify-center gap-3 px-10">
-      <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
-      <p className="max-w-md text-muted-foreground">
-        {campaign.notes.trim()
-          ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
-          : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
-      </p>
-      <div className="flex gap-2">
-        {!campaign.notes.trim() && (
-          <Button onClick={() => setProfiles({ kind: 'campaign', id: campaign.id })}>
-            <Flag /> Write campaign notes
+  const main =
+    view === 'trash' ? (
+      <TrashView items={trash} onRestore={restoreItem} onPurge={purgeItem} onEmpty={emptyTrash} />
+    ) : selected ? (
+      <Editor
+        prospect={selected}
+        from={settings?.mail?.fromEmail ? `${settings.mail.fromName ? `${settings.mail.fromName} ` : ''}<${settings.mail.fromEmail}>` : ''}
+        voiceName={voice.name}
+        attachments={campaign.attachments}
+        queuePosition={queuePosition}
+        showDiff={showDiff}
+        onToggleDiff={() => setShowDiff((v) => !v)}
+        regenerating={regeneratingId === selected.id}
+        onRegenerate={regenerate}
+        onRestoreVersion={restoreVersion}
+        onDeleteVersion={deleteVersion}
+        onChange={(patch) => (patch.to ? setRecipients(patch.to) : update(selected.id, (p) => ({ ...p, ...patch })))}
+        onRetry={(website) => update(selected.id, (p) => ({ ...p, status: 'queued', progress: [], error: undefined, domain: website || p.domain }))}
+        onSave={save}
+        panelTab={rightOpen ? tab : null}
+        showPanelButtons={!(rightDocks && rightOpen)}
+        pendingSuggestions={(activeChat(selected)?.messages ?? []).flatMap((m) => m.proposals ?? []).filter((x) => x.state === 'pending').length}
+        onPanel={togglePanel}
+      />
+    ) : (
+      <div className="flex h-full flex-col items-start justify-center gap-3 px-10">
+        <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
+        <p className="max-w-md text-muted-foreground">
+          {campaign.notes.trim()
+            ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
+            : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
+        </p>
+        <div className="flex gap-2">
+          {!campaign.notes.trim() && (
+            <Button onClick={() => setProfiles({ kind: 'campaign', id: campaign.id })}>
+              <Flag /> Write campaign notes
+            </Button>
+          )}
+          <Button variant={campaign.notes.trim() ? 'default' : 'outline'} onClick={() => setAdding(true)}>
+            <Plus /> Add to campaign
           </Button>
-        )}
-        <Button variant={campaign.notes.trim() ? 'default' : 'outline'} onClick={() => setAdding(true)}>
-          <Plus /> Add to campaign
-        </Button>
+        </div>
       </div>
-    </div>
+    )
+
+  const settingsDialog = (
+    <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} onReset={startFresh} />
   )
+
+  if (!onboarded)
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Onboarding
+          onFinish={finishOnboarding}
+          onSkip={() => setOnboarded(true)}
+          mailConnected={!!settings?.mail && !!settings.hasMailPassword}
+          onConnectMail={() => setSettingsOpen(true)}
+        />
+        {settingsDialog}
+        <Toaster theme={theme} position="bottom-center" />
+      </TooltipProvider>
+    )
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -1173,7 +1353,7 @@ export default function App({ saved }: { saved: SavedState }) {
           trashCount={trash.length}
           viewingTrash={view === 'trash'}
           onOpenTrash={() => setView((v) => (v === 'trash' ? 'email' : 'trash'))}
-          mailAddress={!window.api ? 'jordan@harbourhackers.example' : settings?.mail && settings.hasMailPassword ? settings.mail.fromEmail : undefined}
+          mailAddress={mailReady ? settings?.mail?.fromEmail : undefined}
           onOpenSettings={() => setSettingsOpen(true)}
           onSwitchCampaign={switchCampaign}
           onEditCampaign={(id) => setProfiles({ kind: 'campaign', id })}
@@ -1232,17 +1412,26 @@ export default function App({ saved }: { saved: SavedState }) {
       <ProfilesDialog
         target={profiles}
         onTarget={setProfiles}
+        event={event}
+        onUpdateEvent={setEvent}
         campaigns={aliveCampaigns}
         voices={aliveVoices}
         onUpdateCampaign={updateCampaign}
         onCreateCampaign={createCampaign}
         onDeleteCampaign={deleteCampaign}
+        onAttach={attachFiles}
+        onRemoveAttachment={removeAttachment}
+        onCreateVoice={createVoice}
+        onUpdateVoice={updateVoice}
         onDeleteVoice={deleteVoice}
+        onAddVoiceNote={addVoiceNote}
         onDeleteVoiceNote={deleteVoiceNote}
+        onAddExample={addExample}
+        onDeleteExample={deleteExample}
       />
       <CommandPalette open={palette} onOpenChange={setPalette} commands={commands} />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} onReset={startFresh} />
+      {settingsDialog}
       <Toaster theme={theme} position="bottom-center" />
     </TooltipProvider>
   )
