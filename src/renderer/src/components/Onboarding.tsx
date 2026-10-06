@@ -5,10 +5,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { ArrowLeft, ArrowRight, Check, CircleAlert, Loader2, Mail, Plus, Sparkles, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { EventFields, type EventInfo } from './EventFields'
+import { FolderFields, type FolderInfo } from './FolderFields'
 
 export interface OnboardingResult {
-  event: EventInfo
+  // The first folder, usually the event.
+  folder: FolderInfo
   campaign: { name: string; notes: string }
   // Style notes, and the emails they came from (kept as examples).
   rules: string[]
@@ -30,7 +31,7 @@ export function Onboarding({
   onConnectMail: () => void
 }) {
   const [step, setStep] = useState(0)
-  const [event, setEvent] = useState<EventInfo>({ name: '', details: '' })
+  const [folder, setFolder] = useState<FolderInfo>({ name: '', notes: '' })
   const [campaign, setCampaign] = useState({ name: 'Sponsors', notes: '' })
   const [emails, setEmails] = useState([''])
   const [rules, setRules] = useState<string[] | null>(null)
@@ -39,7 +40,7 @@ export function Onboarding({
   const [error, setError] = useState('')
 
   const pasted = emails.map((e) => e.trim()).filter(Boolean)
-  const finish = () => onFinish({ event, campaign, rules: rules ?? [], emails: pasted })
+  const finish = () => onFinish({ folder, campaign, rules: rules ?? [], emails: pasted })
 
   const learn = async () => {
     if (!window.api || !pasted.length) return
@@ -54,13 +55,14 @@ export function Onboarding({
   const steps: { title: string; description: string; body: ReactNode; canContinue: boolean; next?: ReactNode }[] = [
     {
       title: 'What’s your event?',
-      description: 'Claude uses this in every email. Type the name and it can pull the details from your Slack, email and the web.',
-      body: <EventFields event={event} onChange={setEvent} autoFocus />,
-      canContinue: !!event.name.trim(),
+      description:
+        'It becomes a folder for your campaigns, and Claude uses it in every email. Type the name and Claude can pull the details from your Slack, email and the web.',
+      body: <FolderFields folder={folder} onChange={setFolder} autoFocus />,
+      canContinue: !!folder.name.trim(),
     },
     {
       title: 'Who are you reaching out to first?',
-      description: 'Each campaign is one group of organisations with one ask. You can add more later.',
+      description: 'Each campaign in the folder is one group of organisations with one ask, like Venues or Sponsors. You can add more later.',
       canContinue: !!campaign.name.trim(),
       body: (
         <div className="grid gap-4">

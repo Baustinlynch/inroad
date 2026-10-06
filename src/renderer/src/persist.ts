@@ -1,39 +1,55 @@
-import type { EventInfo } from './components/EventFields'
-import { firstRunCampaign, firstRunVoice, type Campaign, type Prospect, type Voice } from './data'
+import { firstRunCampaign, firstRunFolder, firstRunVoice, type Campaign, type Folder, type Prospect, type Voice } from './data'
 
 // Everything worth keeping between launches. UI-only state (open panels,
 // filters, theme) lives elsewhere.
 export interface SavedState {
   version: 1
   prospects: Prospect[]
+  folders: Folder[]
   campaigns: Campaign[]
   voices: Voice[]
   campaignId: string
   selectedId: string
-  // Shared by every campaign. Missing in saves from before onboarding existed.
-  event?: EventInfo
+  // Before folders, one event was shared by every campaign; it becomes the first folder.
+  event?: { name: string; details: string }
   // False until the first-run setup is finished (or skipped).
   onboarded?: boolean
 }
 
 export function firstRun(): SavedState {
   const voice = firstRunVoice()
-  const campaign = firstRunCampaign(voice.id)
+  const folder = firstRunFolder()
+  const campaign = firstRunCampaign(folder.id, voice.id)
   return {
     version: 1,
     prospects: [],
+    folders: [folder],
     campaigns: [campaign],
     voices: [voice],
     campaignId: campaign.id,
     selectedId: '',
-    event: { name: '', details: '' },
     onboarded: false,
+  }
+}
+
+// Saves from before folders: put every campaign in one folder made from the
+// old shared event. Safe to run on state that already has folders.
+export function withFolders(state: SavedState): SavedState {
+  const folders = state.folders?.length
+    ? state.folders
+    : [{ id: crypto.randomUUID(), name: state.event?.name || 'My event', notes: state.event?.details ?? '' }]
+  return {
+    ...state,
+    folders,
+    event: undefined,
+    campaigns: state.campaigns.map((c) => ({ ...c, folderId: folders.some((f) => f.id === c.folderId) ? c.folderId : folders[0].id })),
   }
 }
 
 // Claude work doesn't survive a restart: research that was running goes back
 // in the queue, and a chat reply that was being written is marked as cut off.
-function resume(state: SavedState): SavedState {
+function resume(saved: SavedState): SavedState {
+  const state = withFolders(saved)
   return {
     ...state,
     // Older saves stored attachments as bare file names with no file behind them.

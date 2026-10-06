@@ -67,11 +67,23 @@ export interface Prospect {
   draftRef?: DraftRef
 }
 
-export interface Campaign {
+// A group of campaigns that share context, e.g. one event with Venues and
+// Sponsors campaigns in it.
+export interface Folder {
   id: string
   name: string
-  // Freeform: what you're asking for, context, what to research, tone. Fed to
-  // both the research agent and the drafting prompt for every email.
+  // What every campaign in the folder should know: what the event is, when
+  // and where, numbers, links.
+  notes: string
+  deletedAt?: number
+}
+
+export interface Campaign {
+  id: string
+  folderId: string
+  name: string
+  // Freeform: who you're contacting, what you're asking for, what to research,
+  // tone. Read after the folder's notes for every email in the campaign.
   notes: string
   // Added to every email in this campaign when it's saved to Drafts.
   attachments: Attachment[]
@@ -103,7 +115,16 @@ export interface VoiceExample {
 // How many saved edits Claude sees as examples (the newest). Pasted emails are always included.
 export const MAX_VOICE_EXAMPLES = 4
 
-export const firstRunCampaign = (voiceId: string): Campaign => ({ id: crypto.randomUUID(), name: 'Sponsors', notes: '', attachments: [], voiceId })
+export const firstRunFolder = (): Folder => ({ id: crypto.randomUUID(), name: '', notes: '' })
+
+export const firstRunCampaign = (folderId: string, voiceId: string): Campaign => ({
+  id: crypto.randomUUID(),
+  folderId,
+  name: 'Sponsors',
+  notes: '',
+  attachments: [],
+  voiceId,
+})
 
 export const firstRunVoice = (): Voice => ({
   id: crypto.randomUUID(),

@@ -12,11 +12,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
-import { Building2, Flag, History, Mail, MessageSquare, PenLine, RotateCcw, StickyNote, Trash2, type LucideIcon } from 'lucide-react'
+import { Building2, Flag, Folder, History, Mail, MessageSquare, PenLine, RotateCcw, StickyNote, Trash2, type LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Hint } from './hint'
 
-export type TrashKind = 'organisation' | 'campaign' | 'voice' | 'note' | 'example' | 'chat' | 'version'
+export type TrashKind = 'folder' | 'organisation' | 'campaign' | 'voice' | 'note' | 'example' | 'chat' | 'version'
 
 export interface TrashItem {
   key: string
@@ -28,6 +28,7 @@ export interface TrashItem {
 }
 
 const kinds: Record<TrashKind, { title: string; Icon: LucideIcon }> = {
+  folder: { title: 'Folders', Icon: Folder },
   organisation: { title: 'Organisations', Icon: Building2 },
   campaign: { title: 'Campaigns', Icon: Flag },
   voice: { title: 'Voices', Icon: PenLine },

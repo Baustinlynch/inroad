@@ -5,8 +5,9 @@ import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import {
-  CalendarDays,
   FileText,
+  FolderOpen,
+  FolderPlus,
   Flag,
   GitCompare,
   Inbox,
@@ -36,12 +37,11 @@ import { TrashView, type TrashItem } from './components/TrashView'
 import { AppSidebar, inFilter, type Filter } from './components/Sidebar'
 import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
-import { MAX_VOICE_EXAMPLES, type Attachment, type Campaign, type ChatMsg, type ChatThread, type Prospect, type Version, type Voice, type VoiceExample } from './data'
+import { MAX_VOICE_EXAMPLES, type Attachment, type Campaign, type ChatMsg, type Folder, type ChatThread, type Prospect, type Version, type Voice, type VoiceExample } from './data'
 import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
-import { firstRun, persist, type SavedState } from './persist'
+import { firstRun, persist, withFolders, type SavedState } from './persist'
 import { htmlHasText, htmlToText, replaceText, textToHtml } from './richtext'
 import { SettingsDialog } from './components/SettingsDialog'
-import type { EventInfo } from './components/EventFields'
 import { Onboarding, type OnboardingResult } from './components/Onboarding'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
 
@@ -79,22 +79,24 @@ function loadTheme(): Theme {
   }
 }
 
-export default function App({ saved }: { saved: SavedState }) {
+export default function App({ saved: loaded }: { saved: SavedState }) {
+  // Hot reloads can hand back state loaded by older code, from before folders.
+  const [saved] = useState(() => withFolders(loaded))
   const [prospects, setProspects] = useState(saved.prospects)
+  const [folders, setFolders] = useState(saved.folders)
   const [campaigns, setCampaigns] = useState(saved.campaigns)
   const [voices, setVoices] = useState(saved.voices)
   // Main area: the selected email, or the Deleted items page.
   const [view, setView] = useState<'email' | 'trash'>('email')
   const [campaignId, setCampaignId] = useState(saved.campaignId)
   const [selectedId, setSelectedId] = useState(saved.selectedId)
-  const [event, setEvent] = useState<EventInfo>(saved.event ?? { name: '', details: '' })
   // Saves from before onboarding existed count as onboarded.
   const [onboarded, setOnboarded] = useState(saved.onboarded !== false)
 
   // Persist to disk (Electron only) whenever the saved state changes.
   useEffect(() => {
-    persist({ version: 1, prospects, campaigns, voices, campaignId, selectedId, event, onboarded })
-  }, [prospects, campaigns, voices, campaignId, selectedId, event, onboarded])
+    persist({ version: 1, prospects, folders, campaigns, voices, campaignId, selectedId, onboarded })
+  }, [prospects, folders, campaigns, voices, campaignId, selectedId, onboarded])
   const [tab, setTab] = useState<Tab>('chat')
   const [filter, setFilter] = useState<Filter>('all')
   const [showDiff, setShowDiff] = useState(false)
@@ -132,7 +134,9 @@ export default function App({ saved }: { saved: SavedState }) {
   }, [rightOpen, rightDocks, rightPanelRef])
 
   // Soft delete: anything with deletedAt is hidden everywhere except Deleted items.
-  const aliveCampaigns = campaigns.filter((c) => !c.deletedAt)
+  // A campaign in a deleted folder is hidden along with it.
+  const aliveFolders = folders.filter((f) => !f.deletedAt)
+  const aliveCampaigns = campaigns.filter((c) => !c.deletedAt && aliveFolders.some((f) => f.id === c.folderId))
   const aliveVoices = voices.filter((v) => !v.deletedAt)
   // If the open campaign was deleted, fall back to the first one left.
   const campaign = aliveCampaigns.find((c) => c.id === campaignId) ?? aliveCampaigns[0]
@@ -164,8 +168,8 @@ export default function App({ saved }: { saved: SavedState }) {
   voicesRef.current = voices
   const settingsRef = useRef(settings)
   settingsRef.current = settings
-  const eventRef = useRef(event)
-  eventRef.current = event
+  const foldersRef = useRef(folders)
+  foldersRef.current = folders
 
   // Streamed progress (research steps, chat text) is routed to whoever started the job.
   const jobs = useRef(new Map<string, (e: ClaudeProgress) => void>())
@@ -190,8 +194,9 @@ export default function App({ saved }: { saved: SavedState }) {
     const c = campaignsRef.current.find((c) => c.id === p.campaignId)
     // Claude should know what's attached so the email can mention it.
     const files = c?.attachments.length ? `\n\nAttached to every email: ${c.attachments.map((a) => a.name).join(', ')}` : ''
-    const ev = eventRef.current
-    const about = ev.name || ev.details ? `About the event${ev.name ? ` (${ev.name})` : ''}:\n${ev.details}\n\nThis campaign:\n` : ''
+    // The folder's shared context comes first, then this campaign's own notes.
+    const f = foldersRef.current.find((f) => f.id === c?.folderId)
+    const about = f && (f.name || f.notes) ? `About ${f.name || 'the event'} (shared by every campaign in it):\n${f.notes}\n\nThis campaign:\n` : ''
     return {
       company: p.company,
       campaignNotes: about + (c?.notes ?? '') + files,
@@ -356,11 +361,25 @@ export default function App({ saved }: { saved: SavedState }) {
 
   const updateCampaign = (id: string, patch: Partial<Campaign>) => setCampaigns((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)))
 
-  const createCampaign = () => {
+  // New campaigns go in the open campaign's folder unless told otherwise.
+  const createCampaign = (folderId = campaign.folderId) => {
     const id = crypto.randomUUID()
-    setCampaigns((cs) => [...cs, { id, name: '', notes: '', attachments: [], voiceId: campaign.voiceId }])
+    setCampaigns((cs) => [...cs, { id, folderId, name: '', notes: '', attachments: [], voiceId: campaign.voiceId }])
     setCampaignId(id)
+    setView('email')
     return id
+  }
+
+  // ---- Folders: shared context for the campaigns inside ----
+  const folder = aliveFolders.find((f) => f.id === campaign.folderId) ?? aliveFolders[0]
+  const updateFolder = (id: string, patch: Partial<Folder>) => setFolders((fs) => fs.map((f) => (f.id === id ? { ...f, ...patch } : f)))
+
+  // A folder always starts with one campaign, so there's somewhere to add organisations.
+  const createFolder = () => {
+    const f: Folder = { id: crypto.randomUUID(), name: '', notes: '' }
+    setFolders((fs) => [...fs, f])
+    createCampaign(f.id)
+    return f.id
   }
 
   // A deleted voice falls back to the first one left; restoring it brings it back.
@@ -423,6 +442,25 @@ export default function App({ saved }: { saved: SavedState }) {
       (at) => setProspectDeleted(id, at),
       undefined,
       () => select(id),
+    )
+  }
+
+  const setFolderDeleted = (id: string, at?: number) => setFolders((fs) => fs.map((f) => (f.id === id ? { ...f, deletedAt: at } : f)))
+
+  const deleteFolder = (id: string) => {
+    const f = folders.find((x) => x.id === id)
+    if (!f || aliveFolders.length < 2) return notify({ text: 'You need at least one folder' })
+    if (profiles?.kind === 'folder' && profiles.id === id) setProfiles(null)
+    const other = aliveCampaigns.find((c) => c.folderId !== id)
+    if (campaign.folderId === id) {
+      if (other) switchCampaign(other.id)
+      else createCampaign(aliveFolders.find((x) => x.id !== id)!.id)
+    }
+    softDelete(
+      f.name || 'Untitled folder',
+      (at) => setFolderDeleted(id, at),
+      undefined,
+      () => setCampaignId(campaigns.find((c) => c.folderId === id && !c.deletedAt)?.id ?? campaignId),
     )
   }
 
@@ -938,6 +976,22 @@ export default function App({ saved }: { saved: SavedState }) {
   type TrashEntry = TrashItem & { set: (at?: number) => void; purge: () => void }
   const campaignName = (id: string) => campaigns.find((c) => c.id === id)?.name || 'Untitled campaign'
   const trash: TrashEntry[] = [
+    ...folders
+      .filter((f) => f.deletedAt)
+      .map<TrashEntry>((f) => ({
+        key: `folder:${f.id}`,
+        kind: 'folder',
+        label: f.name || 'Untitled folder',
+        context: `${campaigns.filter((c) => c.folderId === f.id && !c.deletedAt).length} campaigns`,
+        deletedAt: f.deletedAt!,
+        set: (at) => setFolderDeleted(f.id, at),
+        purge: () => {
+          const ids = campaigns.filter((c) => c.folderId === f.id).map((c) => c.id)
+          setFolders((fs) => fs.filter((x) => x.id !== f.id))
+          setCampaigns((cs) => cs.filter((c) => c.folderId !== f.id))
+          setProspects((ps) => ps.filter((p) => !ids.includes(p.campaignId)))
+        },
+      })),
     ...campaigns
       .filter((c) => c.deletedAt)
       .map<TrashEntry>((c) => ({
@@ -946,7 +1000,11 @@ export default function App({ saved }: { saved: SavedState }) {
         label: c.name || 'Untitled campaign',
         context: `${prospects.filter((p) => p.campaignId === c.id && !p.deletedAt).length} organisations`,
         deletedAt: c.deletedAt!,
-        set: (at) => setCampaignDeleted(c.id, at),
+        set: (at) => {
+          setCampaignDeleted(c.id, at)
+          // Restoring a campaign from a deleted folder brings the folder back too.
+          if (at === undefined) setFolderDeleted(c.folderId, undefined)
+        },
         purge: () => {
           setCampaigns((cs) => cs.filter((x) => x.id !== c.id))
           setProspects((ps) => ps.filter((p) => p.campaignId !== c.id))
@@ -1134,10 +1192,18 @@ export default function App({ saved }: { saved: SavedState }) {
         id: `campaign-${c.id}`,
         group: 'Campaigns & voices',
         label: `Switch to ${c.name || 'Untitled campaign'}`,
+        hint: folders.find((f) => f.id === c.folderId)?.name,
         icon: <Flag />,
         run: () => switchCampaign(c.id),
       })),
-    { id: 'event', group: 'Campaigns & voices', label: 'Edit event details', icon: <CalendarDays />, run: () => setProfiles({ kind: 'event' }) },
+    {
+      id: 'folder',
+      group: 'Campaigns & voices',
+      label: `Edit ${folder.name || 'folder'} context`,
+      icon: <FolderOpen />,
+      run: () => setProfiles({ kind: 'folder', id: folder.id }),
+    },
+    { id: 'new-folder', group: 'Campaigns & voices', label: 'New folder', icon: <FolderPlus />, run: () => setProfiles({ kind: 'folder', id: createFolder() }) },
     { id: 'campaign', group: 'Campaigns & voices', label: 'Edit campaign notes', icon: <Flag />, run: () => setProfiles({ kind: 'campaign', id: campaignId }) },
     {
       id: 'new-campaign',
@@ -1232,7 +1298,7 @@ export default function App({ saved }: { saved: SavedState }) {
   // running finishes into nothing, and saves waiting to reach the mailbox are cancelled.
   // Fills in the blank first-run campaign and voice from what setup collected.
   const finishOnboarding = (r: OnboardingResult) => {
-    setEvent(r.event)
+    updateFolder(folder.id, { name: r.folder.name.trim(), notes: r.folder.notes.trim() })
     updateCampaign(campaign.id, { name: r.campaign.name.trim(), notes: r.campaign.notes.trim() })
     updateVoice(voice.id, {
       notes: [...voice.notes, ...r.rules.map((text) => ({ text, fresh: false }))],
@@ -1253,7 +1319,7 @@ export default function App({ saved }: { saved: SavedState }) {
     setVoices(fresh.voices)
     setCampaignId(fresh.campaignId)
     setSelectedId(fresh.selectedId)
-    setEvent(fresh.event!)
+    setFolders(fresh.folders)
     setOnboarded(false)
     setView('email')
     setSettingsOpen(false)
@@ -1358,6 +1424,9 @@ export default function App({ saved }: { saved: SavedState }) {
           onSwitchCampaign={switchCampaign}
           onEditCampaign={(id) => setProfiles({ kind: 'campaign', id })}
           onNewCampaign={() => setProfiles({ kind: 'campaign', id: createCampaign() })}
+          folders={aliveFolders}
+          onEditFolder={(id) => setProfiles({ kind: 'folder', id })}
+          onNewFolder={() => setProfiles({ kind: 'folder', id: createFolder() })}
           onSetVoice={setVoice}
           onEditVoices={editVoices}
           selectedId={selectedId}
@@ -1412,8 +1481,10 @@ export default function App({ saved }: { saved: SavedState }) {
       <ProfilesDialog
         target={profiles}
         onTarget={setProfiles}
-        event={event}
-        onUpdateEvent={setEvent}
+        folders={aliveFolders}
+        onUpdateFolder={updateFolder}
+        onCreateFolder={createFolder}
+        onDeleteFolder={deleteFolder}
         campaigns={aliveCampaigns}
         voices={aliveVoices}
         onUpdateCampaign={updateCampaign}

@@ -5,23 +5,23 @@ import { Textarea } from '@/components/ui/textarea'
 import { CircleAlert, Loader2, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-export interface EventInfo {
+// The parts of a folder these fields edit.
+export interface FolderInfo {
   name: string
-  // Freeform notes about the event, shared by every campaign.
-  details: string
+  notes: string
 }
 
-// Event name + details, with a button that has Claude look the event up in
-// the user's connected tools (Slack, email…) and on the web.
-export function EventFields({ event, onChange, autoFocus }: { event: EventInfo; onChange: (e: EventInfo) => void; autoFocus?: boolean }) {
+// A folder's name and shared context, with a button that has Claude look it
+// up (usually an event) in the user's connected tools (Slack, email…) and on the web.
+export function FolderFields({ folder, onChange, autoFocus }: { folder: FolderInfo; onChange: (f: FolderInfo) => void; autoFocus?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<string[]>([])
   const [sources, setSources] = useState<string[]>([])
   const [error, setError] = useState('')
   const job = useRef('')
-  // Latest event for when the lookup finishes (the user may keep typing).
-  const latest = useRef(event)
-  latest.current = event
+  // Latest values for when the lookup finishes (the user may keep typing).
+  const latest = useRef(folder)
+  latest.current = folder
 
   useEffect(
     () =>
@@ -32,35 +32,35 @@ export function EventFields({ event, onChange, autoFocus }: { event: EventInfo; 
   )
 
   const lookUp = async () => {
-    if (!window.api || !event.name.trim()) return
+    if (!window.api || !folder.name.trim()) return
     job.current = crypto.randomUUID()
     setBusy(true)
     setSteps([])
     setSources([])
     setError('')
-    const res = await window.api.claude.lookupEvent({ jobId: job.current, name: event.name.trim(), hint: event.details.trim() || undefined })
+    const res = await window.api.claude.lookupEvent({ jobId: job.current, name: folder.name.trim(), hint: folder.notes.trim() || undefined })
     setBusy(false)
     if (!res.ok) return setError(res.error)
     setSources(res.value.sources)
     // Keep anything the user had written, above what Claude found.
-    const mine = latest.current.details.trim()
-    onChange({ ...latest.current, details: mine ? `${mine}\n\n${res.value.details}` : res.value.details })
+    const mine = latest.current.notes.trim()
+    onChange({ ...latest.current, notes: mine ? `${mine}\n\n${res.value.details}` : res.value.details })
   }
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-1.5">
-        <Label htmlFor="event-name">Event name</Label>
+        <Label htmlFor="folder-name">Name</Label>
         <div className="flex gap-2">
           <Input
-            id="event-name"
+            id="folder-name"
             autoFocus={autoFocus}
-            value={event.name}
-            onChange={(e) => onChange({ ...event, name: e.target.value })}
+            value={folder.name}
+            onChange={(e) => onChange({ ...folder, name: e.target.value })}
             onKeyDown={(e) => e.key === 'Enter' && lookUp()}
             placeholder="e.g. Hack the Harbour 2026"
           />
-          <Button variant="outline" onClick={lookUp} disabled={busy || !event.name.trim() || !window.api}>
+          <Button variant="outline" onClick={lookUp} disabled={busy || !folder.name.trim() || !window.api}>
             {busy ? <Loader2 className="animate-spin" /> : <Sparkles />} Find details
           </Button>
         </div>
@@ -89,12 +89,12 @@ export function EventFields({ event, onChange, autoFocus }: { event: EventInfo; 
       )}
 
       <div className="grid gap-1.5">
-        <Label htmlFor="event-details">About the event</Label>
+        <Label htmlFor="folder-notes">Shared context</Label>
         <Textarea
-          id="event-details"
-          value={event.details}
-          onChange={(e) => onChange({ ...event, details: e.target.value })}
-          placeholder="What it is, when and where, who comes and how many, past numbers, links. Claude uses this in every email."
+          id="folder-notes"
+          value={folder.notes}
+          onChange={(e) => onChange({ ...folder, notes: e.target.value })}
+          placeholder="What it is, when and where, who comes and how many, past numbers, links. Every campaign in this folder uses it."
           className="min-h-48 leading-relaxed"
         />
         {sources.length > 0 && (

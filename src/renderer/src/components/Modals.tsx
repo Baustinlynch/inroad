@@ -2,13 +2,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { CalendarDays, Check, Flag, Mail, Paperclip, PenLine, Plus, Sparkles, Trash2, X } from 'lucide-react'
+import { Check, Flag, FolderOpen, FolderPlus, Mail, Paperclip, PenLine, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { MAX_VOICE_EXAMPLES, type Campaign, type Voice } from '../data'
-import { EventFields, type EventInfo } from './EventFields'
+import { MAX_VOICE_EXAMPLES, type Campaign, type Folder, type Voice } from '../data'
+import { FolderFields } from './FolderFields'
 import { ButtonKeys } from './hint'
 
 export function AddCompaniesDialog({
@@ -57,7 +58,7 @@ export function AddCompaniesDialog({
           rows={7}
           placeholder={'Brightline Health\nCobalt Systems, cobalt.example\nMeridian Bank'}
         />
-        <p className="text-xs text-muted-foreground">Each one is researched and drafted from the event details and this campaign’s notes, written in the “{voiceName}” voice.</p>
+        <p className="text-xs text-muted-foreground">Each one is researched and drafted from the folder’s context and this campaign’s notes, written in the “{voiceName}” voice.</p>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
@@ -72,17 +73,20 @@ export function AddCompaniesDialog({
   )
 }
 
-export type ProfilesTarget = { kind: 'event' } | { kind: 'campaign' | 'voice'; id: string }
+export type ProfilesTarget = { kind: 'folder' | 'campaign' | 'voice'; id: string }
 
 interface ProfilesProps {
   target: ProfilesTarget | null
   onTarget: (t: ProfilesTarget | null) => void
-  event: EventInfo
-  onUpdateEvent: (e: EventInfo) => void
+  folders: Folder[]
+  onUpdateFolder: (id: string, patch: Partial<Folder>) => void
+  // Returns the new folder's id.
+  onCreateFolder: () => string
+  onDeleteFolder: (id: string) => void
   campaigns: Campaign[]
   voices: Voice[]
   onUpdateCampaign: (id: string, patch: Partial<Campaign>) => void
-  onCreateCampaign: () => string
+  onCreateCampaign: (folderId: string) => string
   onDeleteCampaign: (id: string) => void
   onAttach: (campaignId: string) => void
   onRemoveAttachment: (campaignId: string, attachmentId: string) => void
@@ -98,7 +102,8 @@ interface ProfilesProps {
 const kb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
 
 export function ProfilesDialog(props: ProfilesProps) {
-  const { target, onTarget, campaigns, voices } = props
+  const { target, onTarget, folders, campaigns, voices } = props
+  const folder = target?.kind === 'folder' ? folders.find((f) => f.id === target.id) : undefined
   const campaign = target?.kind === 'campaign' ? campaigns.find((c) => c.id === target.id) : undefined
   const voice = target?.kind === 'voice' ? voices.find((v) => v.id === target.id) : undefined
 
@@ -106,31 +111,46 @@ export function ProfilesDialog(props: ProfilesProps) {
     <Dialog open={!!target} onOpenChange={(o) => !o && onTarget(null)}>
       <DialogContent className="flex h-[min(640px,90vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="border-b px-4 py-3">
-          <DialogTitle>Event, campaigns & voices</DialogTitle>
-          <DialogDescription className="sr-only">Edit the event, campaign notes and voice profiles</DialogDescription>
+          <DialogTitle>Folders, campaigns & voices</DialogTitle>
+          <DialogDescription className="sr-only">Edit folder context, campaign notes and voice profiles</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1">
           <nav className="w-60 shrink-0 space-y-6 overflow-y-auto border-r bg-muted/30 p-3">
-            <NavGroup title="Event">
-              <NavItem icon={<CalendarDays />} active={target?.kind === 'event'} onClick={() => onTarget({ kind: 'event' })}>
-                {props.event.name || 'Your event'}
-              </NavItem>
-            </NavGroup>
-            <NavGroup title="Campaigns">
-              {campaigns.map((c) => (
-                <NavItem
-                  key={c.id}
-                  icon={<Flag />}
-                  active={target?.kind === 'campaign' && target.id === c.id}
-                  onClick={() => onTarget({ kind: 'campaign', id: c.id })}
-                  onDelete={campaigns.length > 1 ? () => props.onDeleteCampaign(c.id) : undefined}
-                  deleteLabel="Delete campaign"
-                >
-                  {c.name || 'Untitled campaign'}
-                </NavItem>
+            <NavGroup title="Folders">
+              {folders.map((f) => (
+                <div key={f.id} className="space-y-1">
+                  <NavItem
+                    icon={<FolderOpen />}
+                    active={target?.kind === 'folder' && target.id === f.id}
+                    onClick={() => onTarget({ kind: 'folder', id: f.id })}
+                    onDelete={folders.length > 1 ? () => props.onDeleteFolder(f.id) : undefined}
+                    deleteLabel="Delete folder"
+                  >
+                    {f.name || 'Untitled folder'}
+                  </NavItem>
+                  <div className="ml-3.5 space-y-1 border-l pl-2">
+                    {campaigns
+                      .filter((c) => c.folderId === f.id)
+                      .map((c) => (
+                        <NavItem
+                          key={c.id}
+                          icon={<Flag />}
+                          active={target?.kind === 'campaign' && target.id === c.id}
+                          onClick={() => onTarget({ kind: 'campaign', id: c.id })}
+                          onDelete={campaigns.length > 1 ? () => props.onDeleteCampaign(c.id) : undefined}
+                          deleteLabel="Delete campaign"
+                        >
+                          {c.name || 'Untitled campaign'}
+                        </NavItem>
+                      ))}
+                    <NavItem icon={<Plus />} muted onClick={() => onTarget({ kind: 'campaign', id: props.onCreateCampaign(f.id) })}>
+                      New campaign
+                    </NavItem>
+                  </div>
+                </div>
               ))}
-              <NavItem icon={<Plus />} muted onClick={() => onTarget({ kind: 'campaign', id: props.onCreateCampaign() })}>
-                New campaign
+              <NavItem icon={<FolderPlus />} muted onClick={() => onTarget({ kind: 'folder', id: props.onCreateFolder() })}>
+                New folder
               </NavItem>
             </NavGroup>
             <NavGroup title="Voices">
@@ -153,10 +173,17 @@ export function ProfilesDialog(props: ProfilesProps) {
           </nav>
 
           <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-            {target?.kind === 'event' && (
+            {folder && (
               <>
-                <p className="mb-4 text-sm text-muted-foreground">Shared by every campaign. Campaign notes then say what you’re asking each group for.</p>
-                <EventFields event={props.event} onChange={props.onUpdateEvent} />
+                <div className="mb-4 flex items-start gap-2">
+                  <p className="flex-1 text-sm text-muted-foreground">
+                    Context every campaign in this folder shares, usually the event. Each campaign’s notes then say what you’re asking that group for.
+                  </p>
+                  <Button variant="ghost" size="sm" className="text-destructive" disabled={folders.length < 2} onClick={() => props.onDeleteFolder(folder.id)}>
+                    <Trash2 /> Delete
+                  </Button>
+                </div>
+                <FolderFields key={folder.id} folder={folder} onChange={(f) => props.onUpdateFolder(folder.id, f)} autoFocus={!folder.name} />
               </>
             )}
 
@@ -184,6 +211,23 @@ function CampaignPage({ campaign, voices, campaigns, ...props }: ProfilesProps &
           <Trash2 /> Delete
         </Button>
       </div>
+      {props.folders.length > 1 && (
+        <div className="mb-2 flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">In folder</span>
+          <Select value={campaign.folderId} onValueChange={(folderId) => props.onUpdateCampaign(campaign.id, { folderId })}>
+            <SelectTrigger size="sm" className="w-auto">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {props.folders.map((f) => (
+                <SelectItem key={f.id} value={f.id}>
+                  {f.name || 'Untitled folder'}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted-foreground">Written in</span>
         {voices.map((v) => (
@@ -194,7 +238,7 @@ function CampaignPage({ campaign, voices, campaigns, ...props }: ProfilesProps &
       </div>
       <p className="mb-2 text-xs text-muted-foreground">
         Who you’re contacting and what you’re asking them for, what Claude should look for when researching each one, and anything about tone. Claude reads this
-        and the event details for every email in this campaign.
+        after the folder’s shared context for every email in this campaign.
       </p>
       <Textarea
         value={campaign.notes}

@@ -1,6 +1,7 @@
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -28,9 +29,9 @@ import {
 } from '@/components/ui/sidebar'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-import { ChevronsUpDown, Flag, Keyboard, Moon, MoreHorizontal, Pencil, PenLine, Plus, Search, Settings2, Sun, Trash2 } from 'lucide-react'
+import { ChevronsUpDown, Flag, FolderOpen, FolderPlus, Keyboard, Moon, MoreHorizontal, Pencil, PenLine, Plus, Search, Settings2, Sun, Trash2 } from 'lucide-react'
 import { useEffect } from 'react'
-import type { Campaign, Prospect, Status, Voice } from '../data'
+import type { Campaign, Folder, Prospect, Status, Voice } from '../data'
 import { Keys } from './hint'
 import { statusStyle } from './status'
 
@@ -46,6 +47,7 @@ interface Props {
   selectedId: string
   onSelect: (id: string) => void
   onAdd: () => void
+  folders: Folder[]
   campaigns: Campaign[]
   // Every campaign's organisations (not deleted ones), for the campaign switcher counts.
   allProspects: Prospect[]
@@ -53,6 +55,8 @@ interface Props {
   onSwitchCampaign: (id: string) => void
   onEditCampaign: (id: string) => void
   onNewCampaign: () => void
+  onEditFolder: (id: string) => void
+  onNewFolder: () => void
   voices: Voice[]
   onDeleteProspect: (id: string) => void
   onDeleteCampaign: (id: string) => void
@@ -85,6 +89,7 @@ export function AppSidebar(props: Props) {
   const { prospects, selectedId, filter } = props
   const { isMobile, setOpenMobile } = useSidebar()
   const campaign = props.campaigns.find((c) => c.id === props.campaignId)!
+  const folder = props.folders.find((f) => f.id === campaign.folderId)
   const { voices } = props
   const voice = voices.find((v) => v.id === campaign.voiceId) ?? voices[0]
   const shown = prospects.filter((p) => inFilter[filter](p.status))
@@ -112,27 +117,51 @@ export function AppSidebar(props: Props) {
                   </div>
                   <div className="grid flex-1 text-left leading-tight">
                     <span className="truncate font-heading font-semibold">{campaign.name || 'Untitled campaign'}</span>
-                    <span className="truncate text-xs text-muted-foreground">{prospects.length} organisations</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {folder?.name ? `${folder.name} · ` : ''}
+                      {prospects.length} organisations
+                    </span>
                   </div>
                   <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side={isMobile ? 'bottom' : 'right'} className="w-60">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">Campaigns</DropdownMenuLabel>
+              <DropdownMenuContent align="start" side={isMobile ? 'bottom' : 'right'} className="max-h-[70vh] w-64">
+                {/* Campaigns grouped under their folder. */}
                 <DropdownMenuRadioGroup value={props.campaignId} onValueChange={props.onSwitchCampaign}>
-                  {props.campaigns.map((c) => (
-                    <DropdownMenuRadioItem key={c.id} value={c.id}>
-                      <span className="flex-1 truncate">{c.name || 'Untitled campaign'}</span>
-                      <span className="text-xs text-muted-foreground">{props.allProspects.filter((p) => p.campaignId === c.id).length}</span>
-                    </DropdownMenuRadioItem>
-                  ))}
+                  {props.folders.map((f, i) => {
+                    const inFolder = props.campaigns.filter((c) => c.folderId === f.id)
+                    if (!inFolder.length) return null
+                    return (
+                      <DropdownMenuGroup key={f.id}>
+                        {i > 0 && <DropdownMenuSeparator />}
+                        <DropdownMenuLabel className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <FolderOpen className="size-3.5" />
+                          <span className="truncate">{f.name || 'Untitled folder'}</span>
+                        </DropdownMenuLabel>
+                        {inFolder.map((c) => (
+                          <DropdownMenuRadioItem key={c.id} value={c.id}>
+                            <span className="flex-1 truncate">{c.name || 'Untitled campaign'}</span>
+                            <span className="text-xs text-muted-foreground">{props.allProspects.filter((p) => p.campaignId === c.id).length}</span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    )
+                  })}
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => props.onEditCampaign(props.campaignId)}>
                   <Pencil /> Edit campaign notes
                 </DropdownMenuItem>
+                {folder && (
+                  <DropdownMenuItem onSelect={() => props.onEditFolder(folder.id)}>
+                    <FolderOpen /> Edit {folder.name || 'folder'} context
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={props.onNewCampaign}>
-                  <Plus /> New campaign
+                  <Plus /> New campaign{folder?.name ? ` in ${folder.name}` : ''}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={props.onNewFolder}>
+                  <FolderPlus /> New folder
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" disabled={props.campaigns.length < 2} onSelect={() => props.onDeleteCampaign(props.campaignId)}>
