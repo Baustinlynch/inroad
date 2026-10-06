@@ -45,7 +45,7 @@ const prospectus = join(mkdtempSync(join(tmpdir(), 'inroad-')), 'Prospectus.pdf'
 writeFileSync(prospectus, '%PDF-1.4 test')
 const saved = await saveDraft(
   creds,
-  { to: ['priya@lumenlabs.example'], subject: 'Hello', html: '<p>Hi <strong>Priya</strong></p>', text: 'Hi Priya', attachments: [] },
+  { to: ['priya@lumenlabs.example'], subject: 'Hello', html: '<p>Hi <strong>Priya</strong></p>', text: 'Hi Priya,\n\nCheers,\nJordan', attachments: [] },
   [{ filename: 'Prospectus.pdf', path: prospectus }],
 )
 assert.ok(saved.ok, !saved.ok ? saved.error : '')
@@ -63,6 +63,8 @@ const src = msg.source!.toString()
 assert.match(src, /text\/html/)
 assert.match(src, /text\/plain/)
 assert.match(src, /filename="?Prospectus\.pdf/)
+// Fastmail and others refuse lines ending in a bare LF; GreenMail doesn't, so check here.
+assert.doesNotMatch(src, /[^\r]\n/, 'message has bare LF line endings')
 assert.equal(msg.envelope?.subject, 'Hello')
 lock.release()
 await c.logout()

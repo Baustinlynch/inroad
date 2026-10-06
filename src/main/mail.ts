@@ -43,6 +43,8 @@ function friendly(err: unknown): string {
   return e.message ?? String(err)
 }
 
+const crlf = (s: string) => s.replace(/\r?\n/g, '\r\n')
+
 // Use the server's \Drafts special-use folder; fall back to a folder named like Drafts.
 async function findDrafts(client: ImapFlow): Promise<string> {
   const boxes = await client.list()
@@ -67,8 +69,10 @@ export function saveDraft(creds: MailCreds, draft: DraftInput, files: { filename
       from: mail.fromName ? { name: mail.fromName, address: mail.fromEmail } : mail.fromEmail,
       to: draft.to,
       subject: draft.subject,
-      html: draft.html,
-      text: draft.text,
+      // Email lines end in CRLF; servers like Fastmail refuse a bare "\n", and
+      // the composer leaves 7-bit text parts exactly as given.
+      html: crlf(draft.html),
+      text: crlf(draft.text),
       attachments: files,
       messageId,
     })
