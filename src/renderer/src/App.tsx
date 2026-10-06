@@ -37,7 +37,7 @@ import { statusStyle } from './components/status'
 import { useBreakpoint } from './layout'
 import { MAX_VOICE_EXAMPLES, type Campaign, type ChatMsg, type ChatThread, type Prospect, type Version, type Voice } from './data'
 import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
-import { persist, type SavedState } from './persist'
+import { firstRun, persist, type SavedState } from './persist'
 import { htmlHasText, htmlToText, replaceText, textToHtml } from './richtext'
 import { SettingsDialog } from './components/SettingsDialog'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
@@ -744,18 +744,6 @@ export default function App({ saved }: { saved: SavedState }) {
     else openChat()
   }
 
-  // Tracks whether a text box has focus, so the UI can say which keys apply.
-  const [typing, setTyping] = useState(false)
-  useEffect(() => {
-    const sync = () => {
-      const el = document.activeElement as HTMLElement | null
-      setTyping(!!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
-    }
-    document.addEventListener('focusin', sync)
-    document.addEventListener('focusout', () => setTimeout(sync))
-    return () => document.removeEventListener('focusin', sync)
-  }, [])
-
   const goToNextReview = () => {
     const next = nextReviewId(selectedId)
     if (next) select(next)
@@ -1016,7 +1004,7 @@ export default function App({ saved }: { saved: SavedState }) {
     },
   ]
 
-  const queuePosition = prospects.filter((p) => p.status === 'queued').findIndex((p) => p.id === selectedId)
+  const queuePosition = prospects.filter((p) => p.status === 'queued' && !p.deletedAt).findIndex((p) => p.id === selectedId)
 
   const addProspects = (orgs: { company: string; website: string }[]) => {
     const added = orgs.map<Prospect>(({ company, website }) => ({
@@ -1093,6 +1081,24 @@ export default function App({ saved }: { saved: SavedState }) {
     }))
   }
 
+  // Settings → Data. Not undoable (the dialog confirms first); research still
+  // running finishes into nothing, and saves waiting to reach the mailbox are cancelled.
+  const startFresh = () => {
+    const fresh = firstRun()
+    Object.values(commitTimers.current).forEach(clearTimeout)
+    commitTimers.current = {}
+    undoStack.current = []
+    redoStack.current = []
+    setProspects(fresh.prospects)
+    setCampaigns(fresh.campaigns)
+    setVoices(fresh.voices)
+    setCampaignId(fresh.campaignId)
+    setSelectedId(fresh.selectedId)
+    setView('email')
+    setSettingsOpen(false)
+    notify({ text: 'Started fresh' })
+  }
+
   const panel = selected && (
     <RightPanel
       prospect={selected}
@@ -1158,7 +1164,7 @@ export default function App({ saved }: { saved: SavedState }) {
       <SidebarProvider open={leftOpen} onOpenChange={setLeftOpen} className="h-svh min-h-0 overflow-hidden">
         <AppSidebar
           prospects={inCampaign}
-          allProspects={prospects}
+          allProspects={prospects.filter((p) => !p.deletedAt)}
           campaigns={aliveCampaigns}
           campaignId={campaign.id}
           voices={aliveVoices}
@@ -1179,7 +1185,6 @@ export default function App({ saved }: { saved: SavedState }) {
           onAdd={() => setAdding(true)}
           filter={filter}
           onFilter={setFilter}
-          typing={typing}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
           onOpenPalette={() => setPalette(true)}
@@ -1237,7 +1242,7 @@ export default function App({ saved }: { saved: SavedState }) {
       />
       <CommandPalette open={palette} onOpenChange={setPalette} commands={commands} />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} onReset={startFresh} />
       <Toaster theme={theme} position="bottom-center" />
     </TooltipProvider>
   )

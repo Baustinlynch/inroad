@@ -11,7 +11,7 @@ export interface SavedState {
   selectedId: string
 }
 
-function firstRun(): SavedState {
+export function firstRun(): SavedState {
   const voice = firstRunVoice()
   const campaign = firstRunCampaign(voice.id)
   return { version: 1, prospects: [], campaigns: [campaign], voices: [voice], campaignId: campaign.id, selectedId: '' }

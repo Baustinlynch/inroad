@@ -6,6 +6,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -20,7 +21,6 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -47,6 +47,7 @@ interface Props {
   onSelect: (id: string) => void
   onAdd: () => void
   campaigns: Campaign[]
+  // Every campaign's organisations (not deleted ones), for the campaign switcher counts.
   allProspects: Prospect[]
   campaignId: string
   onSwitchCampaign: (id: string) => void
@@ -59,7 +60,6 @@ interface Props {
   onEditVoices: () => void
   filter: Filter
   onFilter: (f: Filter) => void
-  typing: boolean
   theme: 'dark' | 'light'
   onToggleTheme: () => void
   onOpenPalette: () => void
@@ -262,48 +262,49 @@ export function AppSidebar(props: Props) {
         </SidebarGroup>
       </SidebarContent>
 
+      {/* Everything that isn't about the emails themselves lives in one menu. */}
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Deleted items" isActive={props.viewingTrash} onClick={props.onOpenTrash} className="text-muted-foreground">
-              <Trash2 />
-              <span>Deleted items</span>
-            </SidebarMenuButton>
-            {props.trashCount > 0 && <SidebarMenuBadge>{props.trashCount}</SidebarMenuBadge>}
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            {/* What single keys do depends on whether a text box has focus. */}
-            <SidebarMenuButton tooltip="Keyboard shortcuts (?)" onClick={props.onShowKeys} className="text-xs text-muted-foreground">
-              <Keyboard />
-              {props.typing ? (
-                <span className="flex items-center gap-1.5">
-                  <Keys keys="esc" /> for single-key shortcuts
-                </span>
-              ) : (
-                <span className="flex items-center gap-1">
-                  <Keys keys="J K" /> move <Keys keys="E" className="ml-1" /> edit <Keys keys="?" className="ml-1" /> all
-                </span>
-              )}
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip={props.theme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={props.onToggleTheme} className="text-muted-foreground">
-              {props.theme === 'dark' ? <Sun /> : <Moon />}
-              <span>{props.theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip={props.mailAddress ? `Settings · ${props.mailAddress}` : 'Connect your mailbox'}
-              onClick={props.onOpenSettings}
-              className="text-xs text-muted-foreground"
-            >
-              <span className="grid size-4 place-items-center">
-                <span className={cn('size-2 rounded-full', props.mailAddress ? 'bg-success' : 'bg-muted-foreground/40')} />
-              </span>
-              <span className="truncate">{props.mailAddress ?? 'Connect mailbox…'}</span>
-              <Settings2 className="ml-auto" />
-            </SidebarMenuButton>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton
+                  size="lg"
+                  tooltip={props.mailAddress ?? 'Connect your mailbox'}
+                  isActive={props.viewingTrash}
+                  className="data-[state=open]:bg-sidebar-accent"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-sidebar-accent">
+                    <span className={cn('size-2 rounded-full', props.mailAddress ? 'bg-success' : 'bg-muted-foreground/50')} />
+                  </span>
+                  <span className="grid min-w-0 flex-1 text-left leading-tight">
+                    <span className="truncate text-sm">{props.mailAddress ?? 'No mailbox'}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {props.mailAddress ? 'Saving to Drafts' : 'Connect to save drafts'}
+                    </span>
+                  </span>
+                  <ChevronsUpDown className="ml-auto text-muted-foreground" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side={isMobile ? 'top' : 'right'} align="end" className="w-60">
+                <DropdownMenuItem onSelect={props.onOpenSettings}>
+                  <Settings2 /> Settings
+                  <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={props.onOpenTrash}>
+                  <Trash2 /> Deleted items
+                  {props.trashCount > 0 && <DropdownMenuShortcut>{props.trashCount}</DropdownMenuShortcut>}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={props.onShowKeys}>
+                  <Keyboard /> Keyboard shortcuts
+                  <DropdownMenuShortcut>?</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={props.onToggleTheme}>
+                  {props.theme === 'dark' ? <Sun /> : <Moon />} {props.theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

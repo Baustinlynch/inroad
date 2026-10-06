@@ -1,3 +1,14 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -6,7 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Check, CircleAlert, KeyRound, Loader2, Mail } from 'lucide-react'
+import { Check, CircleAlert, Database, KeyRound, Loader2, Mail, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { MailSettings, PublicSettings } from '../../../shared/api'
 
@@ -38,11 +49,14 @@ export function SettingsDialog({
   onOpenChange,
   settings,
   onSaved,
+  onReset,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   settings: PublicSettings | null
   onSaved: (s: PublicSettings) => void
+  // Replaces every organisation, campaign and voice with a blank start.
+  onReset: () => void
 }) {
   const [provider, setProvider] = useState<Provider>('gmail')
   const [mail, setMail] = useState<MailSettings>({ host: PROVIDERS.gmail.host, port: 993, secure: true, user: '', fromName: '', fromEmail: '' })
@@ -134,6 +148,9 @@ export function SettingsDialog({
             </TabsTrigger>
             <TabsTrigger value="claude">
               <KeyRound /> Claude
+            </TabsTrigger>
+            <TabsTrigger value="data">
+              <Database /> Data
             </TabsTrigger>
           </TabsList>
 
@@ -278,6 +295,36 @@ export function SettingsDialog({
               <Button disabled={!desktop || busy || !apiKey.trim()} onClick={saveKey}>
                 Save key
               </Button>
+            </DialogFooter>
+          </TabsContent>
+
+          <TabsContent value="data" className="mt-3 grid gap-3">
+            <p className="text-sm text-muted-foreground">
+              Everything you write in Inroad is stored on this computer. Starting fresh permanently removes all organisations, emails, chats, campaigns
+              and voices, including Deleted items. Your mailbox and Claude settings stay, and nothing in your mailbox is touched.
+            </p>
+            <DialogFooter>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive">
+                    <Trash2 /> Start fresh…
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Start fresh?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      All organisations, emails, chats, campaigns and voices will be deleted for good. This can’t be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={onReset}>
+                      Delete everything
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </DialogFooter>
           </TabsContent>
         </Tabs>
