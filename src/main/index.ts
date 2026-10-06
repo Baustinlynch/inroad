@@ -1,7 +1,8 @@
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import type { Result } from '../shared/api'
+import type { ClaudeProgress, Result } from '../shared/api'
+import * as claude from './claude'
 import { deleteDraft, saveDraft, testMail, type MailCreds } from './mail'
 import { getPublicSettings, getSecrets, updateSettings } from './settings'
 import { loadState, saveState } from './store'
@@ -49,6 +50,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  claude.configureClaude({ workspace: join(app.getPath('userData'), 'agent-workspace'), clientApp: `inroad/${app.getVersion()}` })
   electronApp.setAppUserModelId('au.ingo.inroad')
   // Dev: F12 toggles devtools; prod: disables reload shortcuts.
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
@@ -57,6 +59,15 @@ app.whenReady().then(() => {
   ipcMain.handle('store:save', (_e, data: unknown) => saveState(data))
   ipcMain.handle('settings:get', () => getPublicSettings())
   ipcMain.handle('settings:set', (_e, patch) => updateSettings(patch))
+  // Claude runs here (via the Agent SDK) so keys and sign-ins stay out of the
+  // renderer. Progress (research steps, chat text) streams back to the window.
+  const key = async () => (await getSecrets()).anthropicKey
+  const emitTo = (sender: Electron.WebContents) => (p: ClaudeProgress) => !sender.isDestroyed() && sender.send('claude:progress', p)
+  ipcMain.handle('claude:test', async () => claude.testClaude(await key()))
+  ipcMain.handle('claude:research', async (e, req) => claude.researchAndDraft(await key(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:draft', async (_e, req) => claude.draft(await key(), req))
+  ipcMain.handle('claude:chat', async (e, req) => claude.chat(await key(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:learnVoice', async (_e, req) => claude.learnVoice(await key(), req))
   ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))
   ipcMain.handle('mail:saveDraft', (_e, draft) => withMail((c) => saveDraft(c, draft)))
   ipcMain.handle('mail:deleteDraft', (_e, ref) => withMail((c) => deleteDraft(c, ref)))

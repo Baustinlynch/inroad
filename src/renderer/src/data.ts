@@ -1,26 +1,13 @@
-import type { DraftRef } from '../../shared/api'
+import type { Brief, DraftRef, Recipient } from '../../shared/api'
+
+export type { Brief, Recipient }
 import { textToHtml } from './richtext'
 
 // All mock data. Companies, people and domains are fictional (.example TLD).
 
 export type Status = 'queued' | 'researching' | 'drafted' | 'edited' | 'saved' | 'failed'
 
-export interface Recipient {
-  name: string
-  role: string
-  email: string
-  confidence: 'high' | 'medium' | 'low'
-  source: string
-}
 
-export interface Brief {
-  summary: string
-  // Headings are chosen by the research agent based on the campaign notes,
-  // e.g. "Past sponsorships" for sponsors, "Capacity & facilities" for venues.
-  sections: { title: string; items: string[] }[]
-  recipients: Recipient[]
-  sources: { title: string; url: string }[]
-}
 
 export interface Proposal {
   id: string
