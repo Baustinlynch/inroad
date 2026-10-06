@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { ChatThread, Prospect, Recipient } from '../data'
+import { useAgentName } from '../agent'
 import { DiffText } from './DiffText'
 import { ButtonKeys, Hint } from './hint'
 
@@ -175,6 +176,7 @@ function RecipientCard({ r, added, onAdd }: { r: Recipient; added: boolean; onAd
 }
 
 function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend, onNewChat, onSelectChat, onDeleteChat }: Props) {
+  const agent = useAgentName()
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const thread = activeChat(p)
@@ -235,11 +237,11 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
       )}
       <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
         <div className="space-y-4 p-4 text-sm">
-          {!ready && messages.length === 0 && <p className="text-muted-foreground">You can chat with Claude about {p.company} once its draft is ready.</p>}
+          {!ready && messages.length === 0 && <p className="text-muted-foreground">You can chat with {agent} about {p.company} once its draft is ready.</p>}
           {ready && messages.length === 0 && (
             <div className="text-muted-foreground">
               <Sparkles className="mb-2 size-4" />
-              Ask Claude to change the email. Try:
+              Ask {agent} to change the email. Try:
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {['Make it shorter', 'Stronger opening line', 'More casual'].map((s) => (
                   <Button key={s} variant="outline" size="xs" onClick={() => onSend(s)}>
@@ -328,14 +330,14 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
               }
             }}
             disabled={!ready}
-            placeholder={ready ? `Tell Claude what to change in the ${p.company} email…` : 'Waiting for the draft…'}
+            placeholder={ready ? `Tell ${agent} what to change in the ${p.company} email…` : 'Waiting for the draft…'}
             className="max-h-40 min-h-16 resize-none bg-background pr-10"
           />
           <Button size="icon-xs" onClick={send} disabled={!draft.trim() || !ready || replying} className="absolute right-2 bottom-2" title="Send (↵)">
             <ArrowUp />
           </Button>
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">{replying ? 'Claude is replying…' : 'Claude sees the email, the brief and your voice.'}</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">{replying ? `${agent} is replying…` : `${agent} sees the email, the brief and your voice.`}</p>
       </div>
     </>
   )

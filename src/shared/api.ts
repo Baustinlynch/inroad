@@ -134,18 +134,36 @@ export interface MailSettings {
   fromEmail: string
 }
 
+// Which agent backend Inroad runs.
+export type AiProvider = 'claude' | 'opencode'
+
+// How Inroad reaches the opencode CLI. Empty path means "opencode" on PATH.
+export interface OpencodeSettings {
+  path: string
+  model: string
+  agent: string
+}
+
 // What the renderer sees: secrets are never sent back, only whether they're set.
 export interface PublicSettings {
   mail: MailSettings | null
   hasMailPassword: boolean
   // Optional: without one, Claude runs on this computer's Claude Code sign-in.
   hasAnthropicKey: boolean
+  aiProvider: AiProvider
+  opencode: OpencodeSettings
+  // False when the OS has no keychain, so secrets are stored unencrypted locally.
+  secureStorage: boolean
 }
 
 export interface SettingsPatch {
   mail?: MailSettings
   mailPassword?: string
   anthropicKey?: string
+  aiProvider?: AiProvider
+  opencodePath?: string
+  opencodeModel?: string
+  opencodeAgent?: string
 }
 
 // A file attached to a campaign's emails. Picked files are copied into
@@ -185,8 +203,9 @@ export interface InroadApi {
     set: (patch: SettingsPatch) => Promise<PublicSettings>
   }
   claude: {
-    // Checks Claude is reachable with the API key, or the Claude Code sign-in if none.
-    test: () => Promise<Result<{ via: 'api-key' | 'claude-login' }>>
+    // Checks the agent backend is reachable: the API key or Claude Code sign-in,
+    // or the opencode CLI when that's the chosen provider.
+    test: () => Promise<Result<{ via: 'api-key' | 'claude-login' | 'opencode' }>>
     research: (req: ResearchRequest) => Promise<Result<ResearchResult>>
     draft: (req: DraftRequest) => Promise<Result<DraftResult>>
     chat: (req: ChatRequest) => Promise<Result<ChatResult>>

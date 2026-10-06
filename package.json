@@ -67,7 +67,8 @@
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true,
     "fsevents@2.3.3": true,
-    "electron-winstaller": false
+    "electron-winstaller": false,
+    "electron@44.5.1": true
   },
   "repository": "github:ingoau/inroad",
   "homepage": "https://github.com/ingoau/inroad"

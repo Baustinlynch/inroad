@@ -1,6 +1,7 @@
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { ReactNode } from 'react'
+import { useAgentName } from '../agent'
 import { Keys } from './hint'
 
 export interface PaletteCommand {
@@ -52,25 +53,27 @@ export function CommandPalette({ open, onOpenChange, commands }: { open: boolean
 }
 
 // Work everywhere, including while typing in the email or chat.
-export const GLOBAL_SHORTCUTS: [string, string][] = [
-  ['⌘ K', 'Search & commands (with text selected in the email: add a link)'],
-  ['⌘ ↵', 'Save to drafts and go to the next one'],
-  ['⌘ Z', 'Undo (typing or actions, newest first)'],
-  ['⌘ ⇧ Z', 'Redo'],
-  ['⌘ \\', 'Toggle sidebar'],
-  ['⌘ ⇧ \\', 'Toggle brief & chat panel'],
-  ['⌘ /', 'Jump between email and chat'],
-  ['⌘ ⇧ B', 'Show / hide the brief'],
-  ['⌘ ]', 'Next organisation'],
-  ['⌘ [', 'Previous organisation'],
-  ['⌘ ⇧ ↵', 'Accept next suggestion'],
-  ['⌘ ⇧ ⌫', 'Reject next suggestion'],
-  ['⌘ D', 'Compare with Claude’s draft'],
-  ['⌘ ,', 'Settings (mailbox and Claude API key)'],
-  ['⌘ R', 'Regenerate draft'],
-  ['⌘ B', 'Bold (also ⌘ I italic, ⌘ ⇧ S strikethrough)'],
-  ['esc', 'Leave the text box'],
-]
+export function globalShortcuts(agent: string): [string, string][] {
+  return [
+    ['⌘ K', 'Search & commands (with text selected in the email: add a link)'],
+    ['⌘ ↵', 'Save to drafts and go to the next one'],
+    ['⌘ Z', 'Undo (typing or actions, newest first)'],
+    ['⌘ ⇧ Z', 'Redo'],
+    ['⌘ \\', 'Toggle sidebar'],
+    ['⌘ ⇧ \\', 'Toggle brief & chat panel'],
+    ['⌘ /', 'Jump between email and chat'],
+    ['⌘ ⇧ B', 'Show / hide the brief'],
+    ['⌘ ]', 'Next organisation'],
+    ['⌘ [', 'Previous organisation'],
+    ['⌘ ⇧ ↵', 'Accept next suggestion'],
+    ['⌘ ⇧ ⌫', 'Reject next suggestion'],
+    ['⌘ D', `Compare with ${agent}’s draft`],
+    ['⌘ ,', 'Settings (mailbox and AI agent)'],
+    ['⌘ R', 'Regenerate draft'],
+    ['⌘ B', 'Bold (also ⌘ I italic, ⌘ ⇧ S strikethrough)'],
+    ['esc', 'Leave the text box'],
+  ]
+}
 
 // Only when no text box is focused (press Esc first).
 export const NAV_SHORTCUTS: [string, string][] = [
@@ -89,6 +92,7 @@ export const NAV_SHORTCUTS: [string, string][] = [
 ]
 
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const agent = useAgentName()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
@@ -96,7 +100,7 @@ export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenC
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>Most of the time you’re typing, so everything important also has a ⌘ shortcut.</DialogDescription>
         </DialogHeader>
-        <ShortcutList title="Anywhere, even while typing" items={GLOBAL_SHORTCUTS} />
+        <ShortcutList title="Anywhere, even while typing" items={globalShortcuts(agent)} />
         <ShortcutList title="When you’re not in a text box" items={NAV_SHORTCUTS} />
       </DialogContent>
     </Dialog>

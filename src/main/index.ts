@@ -2,10 +2,11 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import type { ClaudeProgress, DraftInput, Result } from '../shared/api'
-import * as claude from './claude'
+import * as ai from './ai'
+import { configureClaude } from './claude'
 import { attachmentFile, pickAttachments } from './files'
 import { deleteDraft, saveDraft, testMail, type MailCreds } from './mail'
-import { getPublicSettings, getSecrets, updateSettings } from './settings'
+import { getAiConfig, getPublicSettings, getSecrets, updateSettings } from './settings'
 import { loadState, saveState } from './store'
 
 // Runs a mail operation with the saved (keychain-decrypted) credentials.
@@ -51,7 +52,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  claude.configureClaude({
+  configureClaude({
     workspace: join(app.getPath('userData'), 'agent-workspace'),
     clientApp: `inroad/${app.getVersion()}`,
     // Packaged: a binary inside app.asar can't be spawned, so point at the unpacked copy (see asarUnpack).
@@ -72,17 +73,17 @@ app.whenReady().then(() => {
   ipcMain.handle('store:save', (_e, data: unknown) => saveState(data))
   ipcMain.handle('settings:get', () => getPublicSettings())
   ipcMain.handle('settings:set', (_e, patch) => updateSettings(patch))
-  // Claude runs here (via the Agent SDK) so keys and sign-ins stay out of the
-  // renderer. Progress (research steps, chat text) streams back to the window.
-  const key = async () => (await getSecrets()).anthropicKey
+  // The agent backend (Claude Agent SDK or the opencode CLI) runs here, so keys
+  // and sign-ins stay out of the renderer. Progress streams back to the window.
+  const config = () => getAiConfig()
   const emitTo = (sender: Electron.WebContents) => (p: ClaudeProgress) => !sender.isDestroyed() && sender.send('claude:progress', p)
-  ipcMain.handle('claude:test', async () => claude.testClaude(await key()))
-  ipcMain.handle('claude:research', async (e, req) => claude.researchAndDraft(await key(), req, emitTo(e.sender)))
-  ipcMain.handle('claude:draft', async (_e, req) => claude.draft(await key(), req))
-  ipcMain.handle('claude:chat', async (e, req) => claude.chat(await key(), req, emitTo(e.sender)))
-  ipcMain.handle('claude:learnVoice', async (_e, req) => claude.learnVoice(await key(), req))
-  ipcMain.handle('claude:lookupEvent', async (e, req) => claude.lookupEvent(await key(), req, emitTo(e.sender)))
-  ipcMain.handle('claude:writingRules', async (_e, req) => claude.writingRules(await key(), req))
+  ipcMain.handle('claude:test', async () => ai.test(await config()))
+  ipcMain.handle('claude:research', async (e, req) => ai.researchAndDraft(await config(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:draft', async (_e, req) => ai.draft(await config(), req))
+  ipcMain.handle('claude:chat', async (e, req) => ai.chat(await config(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:learnVoice', async (_e, req) => ai.learnVoice(await config(), req))
+  ipcMain.handle('claude:lookupEvent', async (e, req) => ai.lookupEvent(await config(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:writingRules', async (_e, req) => ai.writingRules(await config(), req))
   ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))
   ipcMain.handle('mail:saveDraft', (_e, draft: DraftInput) =>
     withMail(async (c) => {

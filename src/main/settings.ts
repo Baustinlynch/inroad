@@ -1,16 +1,30 @@
 import { app, safeStorage } from 'electron'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { MailSettings, PublicSettings, SettingsPatch } from '../shared/api'
+import type { AiProvider, MailSettings, PublicSettings, SettingsPatch } from '../shared/api'
 
 // Secrets are encrypted with the OS keychain (safeStorage) before touching disk.
 interface StoredSettings {
   mail: MailSettings | null
   mailPassword?: string // base64 of encrypted bytes
   anthropicKey?: string
+  aiProvider?: AiProvider
+  opencodePath?: string
+  opencodeModel?: string
+  opencodeAgent?: string
+}
+
+// Everything the main process needs to run a request against the chosen backend.
+export interface AiConfig {
+  provider: AiProvider
+  anthropicKey?: string
+  opencode: { executable: string; workspace: string; model?: string; agent: string }
 }
 
 const file = () => join(app.getPath('userData'), 'settings.json')
+
+// Each agent run gets its own empty working folder (see claude.ts / opencode.ts).
+const agentWorkspace = () => join(app.getPath('userData'), 'agent-workspace')
 
 async function read(): Promise<StoredSettings> {
   try {
@@ -25,17 +39,33 @@ async function write(s: StoredSettings) {
   await writeFile(file(), JSON.stringify(s, null, 2), { mode: 0o600 })
 }
 
+// Secrets are encrypted with the OS keychain (safeStorage) when it's available.
+// Some systems (headless Linux, servers without a keyring) have no keychain;
+// rather than fail every save, fall back to a 0600 file and mark the value so
+// it can still be read back. Older saves had no prefix and are treated as safe.
+const PLAIN_PREFIX = 'plain:'
+const SAFE_PREFIX = 'safe:'
+
 function encrypt(plain: string): string {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage is not available on this system')
-  return safeStorage.encryptString(plain).toString('base64')
+  if (safeStorage.isEncryptionAvailable()) return SAFE_PREFIX + safeStorage.encryptString(plain).toString('base64')
+  console.warn('Inroad: no OS keychain available, storing settings unencrypted')
+  return PLAIN_PREFIX + Buffer.from(plain, 'utf8').toString('base64')
 }
 
-const decrypt = (enc?: string) => (enc ? safeStorage.decryptString(Buffer.from(enc, 'base64')) : undefined)
+function decrypt(enc?: string): string | undefined {
+  if (!enc) return undefined
+  if (enc.startsWith(PLAIN_PREFIX)) return Buffer.from(enc.slice(PLAIN_PREFIX.length), 'base64').toString('utf8')
+  const raw = enc.startsWith(SAFE_PREFIX) ? enc.slice(SAFE_PREFIX.length) : enc
+  return safeStorage.decryptString(Buffer.from(raw, 'base64'))
+}
 
 const toPublic = (s: StoredSettings): PublicSettings => ({
   mail: s.mail,
   hasMailPassword: !!s.mailPassword,
   hasAnthropicKey: !!s.anthropicKey,
+  aiProvider: s.aiProvider ?? 'claude',
+  opencode: { path: s.opencodePath ?? '', model: s.opencodeModel ?? '', agent: s.opencodeAgent ?? '' },
+  secureStorage: safeStorage.isEncryptionAvailable(),
 })
 
 export async function getPublicSettings() {
@@ -48,6 +78,10 @@ export async function updateSettings(patch: SettingsPatch) {
   // Empty string clears a secret; undefined leaves it unchanged.
   if (patch.mailPassword !== undefined) s.mailPassword = patch.mailPassword ? encrypt(patch.mailPassword) : undefined
   if (patch.anthropicKey !== undefined) s.anthropicKey = patch.anthropicKey ? encrypt(patch.anthropicKey) : undefined
+  if (patch.aiProvider !== undefined) s.aiProvider = patch.aiProvider
+  if (patch.opencodePath !== undefined) s.opencodePath = patch.opencodePath
+  if (patch.opencodeModel !== undefined) s.opencodeModel = patch.opencodeModel
+  if (patch.opencodeAgent !== undefined) s.opencodeAgent = patch.opencodeAgent
   await write(s)
   return toPublic(s)
 }
@@ -56,4 +90,19 @@ export async function updateSettings(patch: SettingsPatch) {
 export async function getSecrets() {
   const s = await read()
   return { mail: s.mail, mailPassword: decrypt(s.mailPassword), anthropicKey: decrypt(s.anthropicKey) }
+}
+
+// Main-process only: what the AI dispatcher (ai.ts) needs for one request.
+export async function getAiConfig(): Promise<AiConfig> {
+  const s = await read()
+  return {
+    provider: s.aiProvider ?? 'claude',
+    anthropicKey: decrypt(s.anthropicKey),
+    opencode: {
+      executable: s.opencodePath?.trim() || 'opencode',
+      workspace: agentWorkspace(),
+      model: s.opencodeModel?.trim() || undefined,
+      agent: s.opencodeAgent?.trim() || 'inroad',
+    },
+  }
 }
