@@ -19,6 +19,7 @@ import {
   Plus,
   Redo2,
   RefreshCw,
+  Settings,
   Sun,
   Trash2,
   Undo2,
@@ -44,7 +45,10 @@ import {
   type Prospect,
   type Version,
 } from './data'
+import type { DraftRef, PublicSettings } from '../../shared/api'
 import { persist, type SavedState } from './persist'
+import { htmlToText } from './richtext'
+import { SettingsDialog } from './components/SettingsDialog'
 import { currentEditor, historyDepth, undoBridge, type UndoEntry } from './undo'
 
 const MAX_CONCURRENT = 3
@@ -93,6 +97,12 @@ export default function App({ saved }: { saved: SavedState }) {
   const [help, setHelp] = useState(false)
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
+  // Mailbox & API key settings (secrets stay in the main process).
+  const [settings, setSettings] = useState<PublicSettings | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    window.api?.settings.get().then(setSettings)
+  }, [])
 
   // Layout. The left sidebar (shadcn Sidebar) collapses to icons on narrower
   // screens and becomes a sheet on phones. The brief/chat panel docks in a
@@ -124,7 +134,7 @@ export default function App({ saved }: { saved: SavedState }) {
   const selected = inCampaign.find((p) => p.id === selectedId)
   const shown = inCampaign.filter((p) => inFilter[filter](p.status))
   const update = (id: string, fn: (p: Prospect) => Prospect) => setProspects((ps) => ps.map((p) => (p.id === id ? fn(p) : p)))
-  const overlayOpen = adding || !!profiles || palette || help || (!rightDocks && rightOpen)
+  const overlayOpen = adding || !!profiles || palette || help || settingsOpen || (!rightDocks && rightOpen)
   // Latest state for callbacks that run later (timers, undo closures).
   const prospectsRef = useRef(prospects)
   prospectsRef.current = prospects
@@ -384,12 +394,33 @@ export default function App({ saved }: { saved: SavedState }) {
 
   const commitTimers = useRef<Record<string, number>>({})
 
+  const mailReady = !window.api || (!!settings?.mail && settings.hasMailPassword)
+
   const save = () => {
     if (!selected?.originalBody) return
-    const { id: pid, status: prev, company } = selected
+    if (!mailReady)
+      return notify({ text: 'Connect your mailbox to save drafts', action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
+    const { id: pid, status: prev, company, draftRef: prevRef } = selected
     const edited = selected.body !== selected.originalBody
     const versionId = crypto.randomUUID()
-    const sync = { committed: false }
+    // This save's trip to the mailbox, so undo knows whether to cancel it or delete the draft.
+    const sync: { committed: boolean; ref?: DraftRef } = { committed: false }
+
+    const commit = async () => {
+      sync.committed = true
+      const p = get(pid)
+      if (!p || !window.api) return
+      const res = await window.api.mail.saveDraft({ to: p.to, subject: p.subject, html: p.body, text: htmlToText(p.body) })
+      if (!res.ok) {
+        update(pid, (q) => ({ ...q, status: prev === 'saved' ? 'edited' : prev, versions: q.versions.filter((v) => v.id !== versionId) }))
+        return notify({ text: `Couldn’t save ${company} to Drafts: ${res.error}`, action: { label: 'Open settings', run: () => setSettingsOpen(true) } })
+      }
+      sync.ref = res.value
+      update(pid, (q) => ({ ...q, draftRef: res.value }))
+      // Saving again replaces the earlier draft rather than leaving a duplicate behind.
+      if (prevRef) void window.api.mail.deleteDraft(prevRef)
+    }
+
     const apply = () => {
       update(pid, (p) => ({
         ...p,
@@ -399,7 +430,7 @@ export default function App({ saved }: { saved: SavedState }) {
       // Held back briefly so undo can cancel it before anything reaches the mailbox.
       sync.committed = false
       clearTimeout(commitTimers.current[pid])
-      commitTimers.current[pid] = window.setTimeout(() => (sync.committed = true), UNDO_GRACE_MS)
+      commitTimers.current[pid] = window.setTimeout(commit, UNDO_GRACE_MS)
     }
     apply()
     const next = nextReviewId(pid)
@@ -409,11 +440,13 @@ export default function App({ saved }: { saved: SavedState }) {
       'Saved to Drafts',
       pid,
       () => {
-        update(pid, (p) => ({ ...p, status: prev, versions: p.versions.filter((v) => v.id !== versionId) }))
+        update(pid, (p) => ({ ...p, status: prev, draftRef: prevRef, versions: p.versions.filter((v) => v.id !== versionId) }))
         if (!sync.committed) {
           clearTimeout(commitTimers.current[pid])
           return `Cancelled saving ${company}. Nothing reached your mailbox.`
         }
+        if (sync.ref && window.api)
+          void window.api.mail.deleteDraft(sync.ref).then((r) => !r.ok && notify({ text: `Couldn’t remove the draft from your mailbox: ${r.error}` }))
         return `Deleted ${company}'s draft from your mailbox${edited ? ' and rolled back the voice profile' : ''}`
       },
       apply,
@@ -650,6 +683,7 @@ export default function App({ saved }: { saved: SavedState }) {
           e.preventDefault()
           fn()
         }
+        if (key === ',') return run(() => setSettingsOpen(true))
         if (key === 'enter') return run(e.shiftKey ? () => resolveNextProposal(true) : save)
         if (key === 'backspace' && e.shiftKey) return run(() => resolveNextProposal(false))
         if (key === '/') return run(toggleChatFocus)
@@ -834,6 +868,7 @@ export default function App({ saved }: { saved: SavedState }) {
       run: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
     },
     { id: 'help', group: 'Actions', label: 'Keyboard shortcuts', icon: <Keyboard />, shortcut: '?', run: () => setHelp(true) },
+    { id: 'settings', group: 'Actions', label: 'Settings', icon: <Settings />, shortcut: '⌘,', run: () => setSettingsOpen(true) },
     { id: 'new-chat', group: 'Actions', label: 'New chat', icon: <MessageSquarePlus />, run: newChat },
     ...(selected && activeChat(selected)
       ? [{ id: 'delete-chat', group: 'Actions' as const, label: `Delete chat “${activeChat(selected)!.title}”`, icon: <Trash2 />, run: () => deleteChat(activeChat(selected)!.id) }]
@@ -983,6 +1018,8 @@ export default function App({ saved }: { saved: SavedState }) {
           trashCount={trash.length}
           viewingTrash={view === 'trash'}
           onOpenTrash={() => setView((v) => (v === 'trash' ? 'email' : 'trash'))}
+          mailAddress={!window.api ? 'jordan@harbourhackers.example' : settings?.mail && settings.hasMailPassword ? settings.mail.fromEmail : undefined}
+          onOpenSettings={() => setSettingsOpen(true)}
           onSwitchCampaign={switchCampaign}
           onEditCampaign={(id) => setProfiles({ kind: 'campaign', id })}
           onNewCampaign={() => setProfiles({ kind: 'campaign', id: createCampaign() })}
@@ -1051,6 +1088,7 @@ export default function App({ saved }: { saved: SavedState }) {
       />
       <CommandPalette open={palette} onOpenChange={setPalette} commands={commands} />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onSaved={setSettings} />
       <Toaster theme={theme} position="bottom-center" />
     </TooltipProvider>
   )

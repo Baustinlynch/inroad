@@ -65,6 +65,9 @@ interface Props {
   onOpenPalette: () => void
   onShowKeys: () => void
   trashCount: number
+  // Undefined until a mailbox is connected.
+  mailAddress?: string
+  onOpenSettings: () => void
   viewingTrash: boolean
   onOpenTrash: () => void
 }
@@ -290,11 +293,16 @@ export function AppSidebar(props: Props) {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="Mailbox connected" className="text-xs text-muted-foreground">
+            <SidebarMenuButton
+              tooltip={props.mailAddress ? `Settings · ${props.mailAddress}` : 'Connect your mailbox'}
+              onClick={props.onOpenSettings}
+              className="text-xs text-muted-foreground"
+            >
               <span className="grid size-4 place-items-center">
-                <span className="size-2 rounded-full bg-success" />
+                <span className={cn('size-2 rounded-full', props.mailAddress ? 'bg-success' : 'bg-muted-foreground/40')} />
               </span>
-              <span className="truncate">jordan@harbourhackers.example</span>
+              <span className="truncate">{props.mailAddress ?? 'Connect mailbox…'}</span>
+              <Settings2 className="ml-auto" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

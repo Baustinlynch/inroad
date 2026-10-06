@@ -1,0 +1,85 @@
+import { randomUUID } from 'node:crypto'
+import { ImapFlow } from 'imapflow'
+import MailComposer from 'nodemailer/lib/mail-composer'
+import type { DraftInput, DraftRef, MailSettings, Result } from '../shared/api'
+
+export interface MailCreds {
+  mail: MailSettings
+  password: string
+}
+
+async function run<T>(creds: MailCreds, fn: (client: ImapFlow) => Promise<T>): Promise<Result<T>> {
+  const client = new ImapFlow({
+    host: creds.mail.host,
+    port: creds.mail.port,
+    secure: creds.mail.secure,
+    auth: { user: creds.mail.user, pass: creds.password },
+    logger: false,
+    connectionTimeout: 15_000,
+  })
+  try {
+    await client.connect()
+    return { ok: true, value: await fn(client) }
+  } catch (err) {
+    return { ok: false, error: friendly(err) }
+  } finally {
+    await client.logout().catch(() => client.close())
+  }
+}
+
+// imapflow's errors are terse; translate the common ones.
+function friendly(err: unknown): string {
+  const e = err as { message?: string; authenticationFailed?: boolean; code?: string }
+  if (e.authenticationFailed) return 'The server rejected the username or password. Most providers need an app password.'
+  if (e.code === 'ENOTFOUND') return 'Couldn’t find that mail server. Check the server name.'
+  if (e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT') return 'Couldn’t reach the mail server. Check the server and port.'
+  return e.message ?? String(err)
+}
+
+// Use the server's \Drafts special-use folder; fall back to a folder named like Drafts.
+async function findDrafts(client: ImapFlow): Promise<string> {
+  const boxes = await client.list()
+  const special = boxes.find((b) => b.specialUse === '\\Drafts')
+  if (special) return special.path
+  const named = boxes.find((b) => /^drafts?$/i.test(b.name))
+  if (named) return named.path
+  throw new Error('Couldn’t find a Drafts folder in this mailbox')
+}
+
+export const testMail = (creds: MailCreds) => run(creds, async (client) => ({ draftsMailbox: await findDrafts(client) }))
+
+export function saveDraft(creds: MailCreds, draft: DraftInput): Promise<Result<DraftRef>> {
+  return run(creds, async (client) => {
+    const mailbox = await findDrafts(client)
+    // Our own Message-ID lets us find the draft later, even on servers that
+    // don't report the new message's UID.
+    const messageId = `<${randomUUID()}@inroad.local>`
+    const { mail } = creds
+    const raw = await new MailComposer({
+      from: mail.fromName ? { name: mail.fromName, address: mail.fromEmail } : mail.fromEmail,
+      to: draft.to,
+      subject: draft.subject,
+      html: draft.html,
+      text: draft.text,
+      messageId,
+    })
+      .compile()
+      .build()
+    const res = await client.append(mailbox, raw, ['\\Draft', '\\Seen'])
+    if (!res) throw new Error('The server refused the draft')
+    return { mailbox, messageId }
+  })
+}
+
+export function deleteDraft(creds: MailCreds, ref: DraftRef): Promise<Result<null>> {
+  return run(creds, async (client) => {
+    const lock = await client.getMailboxLock(ref.mailbox)
+    try {
+      const uids = await client.search({ header: { 'message-id': ref.messageId } }, { uid: true })
+      if (uids && uids.length) await client.messageDelete(uids.join(','), { uid: true })
+      return null
+    } finally {
+      lock.release()
+    }
+  })
+}

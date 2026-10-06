@@ -1,7 +1,17 @@
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
+import type { Result } from '../shared/api'
+import { deleteDraft, saveDraft, testMail, type MailCreds } from './mail'
+import { getPublicSettings, getSecrets, updateSettings } from './settings'
 import { loadState, saveState } from './store'
+
+// Runs a mail operation with the saved (keychain-decrypted) credentials.
+async function withMail<T>(fn: (creds: MailCreds) => Promise<Result<T>>): Promise<Result<T>> {
+  const { mail, mailPassword } = await getSecrets()
+  if (!mail || !mailPassword) return { ok: false, error: 'Connect your mailbox in Settings first' }
+  return fn({ mail, password: mailPassword })
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -45,6 +55,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('store:load', () => loadState())
   ipcMain.handle('store:save', (_e, data: unknown) => saveState(data))
+  ipcMain.handle('settings:get', () => getPublicSettings())
+  ipcMain.handle('settings:set', (_e, patch) => updateSettings(patch))
+  ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))
+  ipcMain.handle('mail:saveDraft', (_e, draft) => withMail((c) => saveDraft(c, draft)))
+  ipcMain.handle('mail:deleteDraft', (_e, ref) => withMail((c) => deleteDraft(c, ref)))
 
   createWindow()
   app.on('activate', () => {

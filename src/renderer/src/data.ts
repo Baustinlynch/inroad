@@ -1,3 +1,4 @@
+import type { DraftRef } from '../../shared/api'
 import { textToHtml } from './richtext'
 
 // All mock data. Companies, people and domains are fictional (.example TLD).
@@ -73,6 +74,8 @@ export interface Prospect {
   versions: Version[]
   // Soft delete: set when moved to Deleted items, cleared on restore.
   deletedAt?: number
+  // The copy in the mailbox's Drafts folder, once saved there.
+  draftRef?: DraftRef
 }
 
 export interface Campaign {
