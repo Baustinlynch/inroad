@@ -1,0 +1,91 @@
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual runs build everything and keep the files as workflow artifacts, without releasing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each build runs on its own platform so npm installs the matching
+          # native Claude binary from the Agent SDK. macOS 26 has Xcode 26,
+          # whose actool compiles the Liquid Glass icon.
+          - name: macOS
+            os: macos-26
+            args: --mac --arm64
+          - name: Windows
+            os: windows-latest
+            args: --win --x64
+          - name: Linux
+            os: ubuntu-latest
+            args: --linux --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Package
+        # Unsigned: macOS is signed ad hoc (see electron-builder.yml), Windows and Linux not at all.
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inroad-${{ matrix.name }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            These builds aren't signed or notarized.
+
+            **macOS (Apple Silicon):** open the `.dmg`, drag Inroad to Applications, then run:
+
+            ```sh
+            xattr -d com.apple.quarantine /Applications/Inroad.app
+            ```
+
+            If macOS says the app is damaged, use `xattr -cr /Applications/Inroad.app` instead.
+
+            **Windows:** run the setup `.exe`. If SmartScreen appears, click More info → Run anyway.
+
+            **Linux:** make the `.AppImage` executable (`chmod +x`) and run it, or `sudo apt install ./Inroad-*.deb`.
+
+            You'll need [Claude Code](https://claude.com/claude-code) signed in on your computer (or an Anthropic API key), and an IMAP mailbox with an app password. See the [README](https://github.com/ingoau/inroad#readme).
