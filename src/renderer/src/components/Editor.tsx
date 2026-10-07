@@ -28,11 +28,14 @@ import {
   Search,
   Trash2,
   X,
+  CircleAlert,
+  MessageSquareText,
 } from 'lucide-react'
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { Attachment, Prospect, Version } from '../data'
 import { useAgentName } from '../agent'
 import { changeCount } from '../diff'
+import { plainText } from '../markdown'
 import { DiffText } from './DiffText'
 import { ButtonKeys, Hint } from './hint'
 import { RichEditor } from './RichEditor'
@@ -63,6 +66,7 @@ interface Props {
   showPanelButtons: boolean
   pendingSuggestions: number
   onPanel: (tab: Tab) => void
+  onDismissComment: (id: string) => void
 }
 
 export function Editor(props: Props) {
@@ -75,6 +79,28 @@ export function Editor(props: Props) {
   const originalText = p.originalBody
   const bodyText = p.body
   const changes = hasDraft ? changeCount(originalText, bodyText) : 0
+
+  // Claude's comments whose phrase is still in the email. Matched as plain
+  // text, so a quote survives the markdown being written slightly differently.
+  const bodyPlain = useMemo(() => plainText(p.body), [p.body])
+  const comments = useMemo(
+    () =>
+      (p.comments ?? [])
+        .filter((c) => !c.dismissed)
+        .map((c) => ({ ...c, plain: plainText(c.quote) }))
+        .filter((c) => c.plain && bodyPlain.includes(c.plain)),
+    [p.comments, bodyPlain],
+  )
+  const highlights = useMemo(() => comments.map((c) => ({ id: c.id, text: c.plain, kind: c.kind, title: c.comment })), [comments])
+  const [activeComment, setActiveComment] = useState<string | null>(null)
+  const showComment = (id: string) => {
+    setActiveComment(id)
+    document.getElementById(`comment-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
+  const showPhrase = (id: string) => {
+    setActiveComment(id)
+    document.querySelector(`[data-comment="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
 
   const setBody = (body: string) =>
     onChange({
@@ -96,7 +122,8 @@ export function Editor(props: Props) {
               href={/^https?:\/\//.test(p.domain) ? p.domain : `https://${p.domain}`}
               target="_blank"
               rel="noreferrer"
-              className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground @lg:inline-flex">
+              className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground @lg:inline-flex"
+            >
               {p.domain} <ExternalLink className="size-3" />
             </a>
           )}
@@ -200,7 +227,55 @@ export function Editor(props: Props) {
                 </div>
               ) : (
                 <div className={cn(regenerating && 'pointer-events-none animate-pulse opacity-40')} style={props.bodyStyle}>
-                  <RichEditor key={p.id} value={p.body} onChange={setBody} />
+                  <RichEditor
+                    key={p.id}
+                    value={p.body}
+                    onChange={setBody}
+                    highlights={highlights}
+                    activeHighlight={activeComment}
+                    onHighlightClick={showComment}
+                  />
+                </div>
+              )}
+
+              {comments.length > 0 && !showDiff && (
+                <div className="mt-5 grid gap-1.5" onMouseLeave={() => setActiveComment(null)}>
+                  {comments.map((c) => (
+                    <div
+                      key={c.id}
+                      id={`comment-${c.id}`}
+                      onMouseEnter={() => setActiveComment(c.id)}
+                      onClick={() => showPhrase(c.id)}
+                      className={cn(
+                        'group flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 text-sm transition-colors',
+                        activeComment === c.id ? 'border-mark/60 bg-mark/10' : 'hover:bg-muted/40',
+                      )}
+                    >
+                      {c.kind === 'verify' ? (
+                        <CircleAlert className="mt-0.5 size-4 shrink-0 text-mark" aria-label="Check this" />
+                      ) : (
+                        <MessageSquareText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-label="Note" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs text-muted-foreground">
+                          {c.kind === 'verify' ? 'Check' : 'Note'} · “{c.plain}”
+                        </div>
+                        <div className="leading-snug">{c.comment}</div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="Dismiss"
+                        className="text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          props.onDismissComment(c.id)
+                        }}
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -226,7 +301,12 @@ export function Editor(props: Props) {
       {hasDraft && (
         <footer className="flex h-12 shrink-0 items-center gap-1 border-t px-3">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            <HistoryMenu versions={p.versions.filter((v) => !v.deletedAt)} current={p.body} onRestore={props.onRestoreVersion} onDelete={props.onDeleteVersion} />
+            <HistoryMenu
+              versions={p.versions.filter((v) => !v.deletedAt)}
+              current={p.body}
+              onRestore={props.onRestoreVersion}
+              onDelete={props.onDeleteVersion}
+            />
             <Hint label="Write a fresh draft from the same brief" keys="⌘ R" side="top">
               <Button variant="ghost" size="sm" onClick={props.onRegenerate} disabled={regenerating}>
                 <RefreshCw className={cn(regenerating && 'animate-spin')} />

@@ -4,8 +4,10 @@ import type {
   ClaudeProgress,
   DraftRequest,
   DraftResult,
+  EventAnswersRequest,
   EventLookupRequest,
   EventLookupResult,
+  ParsedOrganisation,
   ResearchRequest,
   ResearchResult,
   Result,
@@ -46,6 +48,14 @@ export function lookupEvent(cfg: AiConfig, req: EventLookupRequest, emit: Emit):
   return cfg.provider === 'opencode' ? opencode.lookupEvent(cfg.opencode, req, emit) : claude.lookupEvent(cfg.anthropicKey, req, emit)
 }
 
+export function applyEventAnswers(cfg: AiConfig, req: EventAnswersRequest): Promise<Result<{ details: string }>> {
+  return cfg.provider === 'opencode' ? opencode.applyEventAnswers(cfg.opencode, req) : claude.applyEventAnswers(cfg.anthropicKey, req)
+}
+
 export function writingRules(cfg: AiConfig, req: WritingRulesRequest): Promise<Result<{ notes: string[] }>> {
   return cfg.provider === 'opencode' ? opencode.writingRules(cfg.opencode, req) : claude.writingRules(cfg.anthropicKey, req)
+}
+
+export function parseOrganisations(cfg: AiConfig, text: string): Promise<Result<ParsedOrganisation[]>> {
+  return cfg.provider === 'opencode' ? opencode.parseOrganisations(cfg.opencode, text) : claude.parseOrganisations(cfg.anthropicKey, text)
 }

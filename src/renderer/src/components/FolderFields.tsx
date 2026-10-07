@@ -2,7 +2,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { CircleAlert, Loader2, Sparkles } from 'lucide-react'
+import { Check, CircleAlert, Loader2, MessageCircleQuestion, Sparkles } from 'lucide-react'
+import type { EventQuestion } from '../../../shared/api'
 import { useEffect, useRef, useState } from 'react'
 import { useAgentName } from '../agent'
 
@@ -18,8 +19,10 @@ export function FolderFields({ folder, onChange, autoFocus }: { folder: FolderIn
   const agent = useAgentName()
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<string[]>([])
-  const [sources, setSources] = useState<string[]>([])
   const [error, setError] = useState('')
+  // Claude's questions from the last lookup, with what the user picked or typed.
+  const [questions, setQuestions] = useState<(EventQuestion & { answer: string })[]>([])
+  const [applying, setApplying] = useState(false)
   const job = useRef('')
   // Latest values for when the lookup finishes (the user may keep typing).
   const latest = useRef(folder)
@@ -38,15 +41,34 @@ export function FolderFields({ folder, onChange, autoFocus }: { folder: FolderIn
     job.current = crypto.randomUUID()
     setBusy(true)
     setSteps([])
-    setSources([])
+    setQuestions([])
     setError('')
     const res = await window.api.claude.lookupEvent({ jobId: job.current, name: folder.name.trim(), hint: folder.notes.trim() || undefined })
     setBusy(false)
     if (!res.ok) return setError(res.error)
-    setSources(res.value.sources)
+    setQuestions(res.value.questions.map((q) => ({ ...q, answer: '' })))
     // Keep anything the user had written, above what Claude found.
     const mine = latest.current.notes.trim()
     onChange({ ...latest.current, notes: mine ? `${mine}\n\n${res.value.details}` : res.value.details })
+  }
+
+  const answered = questions.filter((q) => q.answer.trim())
+  const setAnswer = (i: number, answer: string) => setQuestions((qs) => qs.map((q, j) => (j === i ? { ...q, answer } : q)))
+
+  // Claude folds the answers into the details, leaving everything else as it is.
+  const applyAnswers = async () => {
+    if (!window.api || !answered.length) return
+    setApplying(true)
+    setError('')
+    const res = await window.api.claude.applyEventAnswers({
+      name: latest.current.name.trim(),
+      details: latest.current.notes,
+      answers: answered.map((q) => ({ question: q.question, answer: q.answer.trim() })),
+    })
+    setApplying(false)
+    if (!res.ok) return setError(res.error)
+    onChange({ ...latest.current, notes: res.value.details })
+    setQuestions([])
   }
 
   return (
@@ -92,6 +114,43 @@ export function FolderFields({ folder, onChange, autoFocus }: { folder: FolderIn
         </div>
       )}
 
+      {questions.length > 0 && !busy && (
+        <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div className="flex items-center gap-2 font-medium">
+            <MessageCircleQuestion className="size-4 text-muted-foreground" /> Claude has {questions.length === 1 ? 'a question' : 'a few questions'}
+          </div>
+          {questions.map((q, i) => (
+            <div key={i} className="grid gap-1.5">
+              <div>{q.question}</div>
+              {q.options.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {q.options.map((o) => (
+                    <Button key={o} size="xs" variant={q.answer === o ? 'secondary' : 'outline'} onClick={() => setAnswer(i, q.answer === o ? '' : o)}>
+                      {q.answer === o && <Check />} {o}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <Input
+                value={q.options.includes(q.answer) ? '' : q.answer}
+                onChange={(e) => setAnswer(i, e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && applyAnswers()}
+                placeholder={q.options.length ? 'Or type your own answer' : 'Your answer'}
+                className="h-8 bg-background"
+              />
+            </div>
+          ))}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setQuestions([])}>
+              Skip
+            </Button>
+            <Button size="sm" onClick={applyAnswers} disabled={applying || !answered.length}>
+              {applying ? <Loader2 className="animate-spin" /> : <Check />} Update details
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-1.5">
         <Label htmlFor="folder-notes">Shared context</Label>
         <Textarea
@@ -101,12 +160,6 @@ export function FolderFields({ folder, onChange, autoFocus }: { folder: FolderIn
           placeholder="What it is, when and where, who comes and how many, past numbers, links. Every campaign in this folder uses it."
           className="min-h-48 leading-relaxed"
         />
-        {sources.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            Found in: {sources.slice(0, 6).join(' · ')}
-            {sources.length > 6 && ` and ${sources.length - 6} more`}. Check it over before you continue.
-          </p>
-        )}
       </div>
     </div>
   )

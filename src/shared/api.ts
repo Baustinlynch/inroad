@@ -29,7 +29,15 @@ export interface VoiceInput {
   examples: { draft?: string; final: string }[]
 }
 
-export interface ResearchRequest {
+// Firm requirements for an email, on top of the campaign notes.
+export interface EmailGuidance {
+  // The campaign's "Email format": structure and must-haves for every email.
+  emailFormat?: string
+  // What the user said about this one organisation, e.g. "mention they sponsored Campfire".
+  orgNote?: string
+}
+
+export interface ResearchRequest extends EmailGuidance {
   jobId: string
   company: string
   website?: string
@@ -44,7 +52,7 @@ export interface ResearchResult {
   draft: DraftResult
 }
 
-export interface DraftRequest {
+export interface DraftRequest extends EmailGuidance {
   company: string
   campaignNotes: string
   research: string
@@ -54,6 +62,15 @@ export interface DraftRequest {
   previousDraft?: string
 }
 
+// Claude's remark on one passage of an email.
+export interface EmailComment {
+  // Exact text from the body (markdown, within one paragraph).
+  quote: string
+  comment: string
+  // verify: a fact to double-check. note: why something is there.
+  kind: 'verify' | 'note'
+}
+
 export interface DraftResult {
   brief: Brief
   // The recipient Claude thinks is best, or '' if none has an address.
@@ -61,10 +78,13 @@ export interface DraftResult {
   subject: string
   // Markdown (the same dialect the app stores; see markdown.ts).
   body: string
+  comments: EmailComment[]
 }
 
-export interface ChatRequest {
+export interface ChatRequest extends EmailGuidance {
   jobId: string
+  // Comments already on the email, so Claude doesn't repeat them.
+  comments?: EmailComment[]
   company: string
   campaignNotes: string
   brief?: Brief
@@ -85,6 +105,7 @@ export interface ProposedEdit {
 export interface ChatResult {
   text: string
   proposals: ProposedEdit[]
+  comments: EmailComment[]
 }
 
 // Onboarding: find what's known about the user's event, via the web and any
@@ -96,16 +117,38 @@ export interface EventLookupRequest {
   hint?: string
 }
 
+// Something only the user can settle, e.g. two sources disagree.
+export interface EventQuestion {
+  question: string
+  // Likely answers to pick from; the user can also type their own.
+  options: string[]
+}
+
 export interface EventLookupResult {
-  // Notes for the campaign: dates, place, audience, numbers, what's being asked for.
+  // Context for every email: one "Label: value" line per fact.
   details: string
-  // Where each part came from, e.g. "Slack #organisers", a URL.
-  sources: string[]
+  questions: EventQuestion[]
+}
+
+export interface EventAnswersRequest {
+  name: string
+  // The current shared context (may include the user's own text).
+  details: string
+  answers: { question: string; answer: string }[]
 }
 
 // Onboarding: style notes drawn from emails the user wrote.
 export interface WritingRulesRequest {
   emails: string[]
+}
+
+// Adding organisations: free text split into organisations by Claude.
+export interface ParsedOrganisation {
+  name: string
+  // '' if none was given.
+  website: string
+  // Instructions for just this organisation, '' if none.
+  note: string
 }
 
 export interface VoiceLearnRequest {
@@ -211,7 +254,10 @@ export interface InroadApi {
     chat: (req: ChatRequest) => Promise<Result<ChatResult>>
     learnVoice: (req: VoiceLearnRequest) => Promise<Result<VoiceLearnResult>>
     lookupEvent: (req: EventLookupRequest) => Promise<Result<EventLookupResult>>
+    // Folds the user's answers into the details.
+    applyEventAnswers: (req: EventAnswersRequest) => Promise<Result<{ details: string }>>
     writingRules: (req: WritingRulesRequest) => Promise<Result<{ notes: string[] }>>
+    parseOrganisations: (text: string) => Promise<Result<ParsedOrganisation[]>>
     // Subscribe to progress for running requests; returns an unsubscribe function.
     onProgress: (cb: (p: ClaudeProgress) => void) => () => void
   }

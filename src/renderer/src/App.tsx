@@ -45,6 +45,7 @@ import {
   type Attachment,
   type Campaign,
   type ChatMsg,
+  type Comment,
   type Folder,
   type ChatThread,
   type Prospect,
@@ -52,7 +53,7 @@ import {
   type Voice,
   type VoiceExample,
 } from './data'
-import type { ClaudeProgress, DraftRef, PublicSettings, VoiceInput } from '../../shared/api'
+import type { ClaudeProgress, DraftRef, EmailComment, PublicSettings, VoiceInput } from '../../shared/api'
 import { firstRun, persist, upgrade, type SavedState } from './persist'
 import { defaultEmailStyle, emailHtml, emailStyleVars, markdownToText, normalizeMarkdown, type EmailStyle } from './markdown'
 import { Onboarding, type OnboardingResult } from './components/Onboarding'
@@ -65,6 +66,9 @@ const UNDO_GRACE_MS = 5000
 type Theme = 'dark' | 'light'
 
 const needsReview = (p: Prospect) => p.status === 'drafted' || p.status === 'edited'
+// Claude's comments, stamped for storing on a prospect.
+const stamp = (comments: EmailComment[], by: Comment['by']): Comment[] => comments.map((c) => ({ ...c, id: crypto.randomUUID(), by, at: Date.now() }))
+
 const hasText = (p: Prospect | undefined, text: string) => !!p && !!text && (p.subject.includes(text) || p.body.includes(text))
 const statusAfter = (p: Prospect, body: string): Prospect['status'] => (p.status === 'saved' ? 'saved' : body !== p.originalBody ? 'edited' : 'drafted')
 
@@ -222,6 +226,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     return {
       company: p.company,
       campaignNotes: about + (c?.notes ?? '') + files,
+      emailFormat: c?.format,
+      orgNote: p.note,
       voice: voiceInput(voiceOf(p.campaignId)),
       senderName: settingsRef.current?.mail?.fromName ?? '',
     }
@@ -253,6 +259,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       originalBody: md,
       to: draft.to ? [draft.to] : [],
       versions: [...q.versions, { id: crypto.randomUUID(), label: `${agent}’s draft`, by: 'claude', at: Date.now(), markdown: md }],
+      comments: [...(q.comments ?? []), ...stamp(draft.comments, 'draft')],
     }))
   }
   useEffect(() => {
@@ -745,7 +752,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     if (!q) return
     const md = normalizeMarkdown(res.value.body)
     const subject = res.value.subject
-    const before = { body: q.body, originalBody: q.originalBody, subject: q.subject, status: q.status }
+    const before = { body: q.body, originalBody: q.originalBody, subject: q.subject, status: q.status, comments: q.comments }
+    const fresh = stamp(res.value.comments, 'draft')
     // Keep your edits in history so regenerating never loses work.
     const added: Version[] = [
       ...(q.versions.some((v) => v.markdown === q.body)
@@ -761,6 +769,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
         subject,
         status: x.status === 'saved' ? 'saved' : 'drafted',
         versions: [...x.versions.filter((v) => !added.some((a) => a.id === v.id)), ...added],
+        // The new draft's comments replace the old draft's; ones from chat stay.
+        comments: [...(x.comments ?? []).filter((c) => c.by !== 'draft' && !fresh.some((f) => f.id === c.id)), ...fresh],
       }))
     apply()
     record(
@@ -1276,12 +1286,13 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
 
   const queuePosition = prospects.filter((p) => p.status === 'queued' && !p.deletedAt).findIndex((p) => p.id === selectedId)
 
-  const addProspects = (orgs: { company: string; website: string }[]) => {
-    const added = orgs.map<Prospect>(({ company, website }) => ({
+  const addProspects = (orgs: { name: string; website: string; note: string }[]) => {
+    const added = orgs.map<Prospect>(({ name, website, note }) => ({
       id: crypto.randomUUID(),
       campaignId,
-      company,
+      company: name,
       domain: website,
+      note: note || undefined,
       status: 'queued',
       progress: [],
       subject: '',
@@ -1341,6 +1352,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       brief: p.brief,
       subject: p.subject,
       body: p.body,
+      comments: (p.comments ?? []).filter((c) => !c.dismissed).map(({ quote, comment, kind }) => ({ quote, comment, kind })),
       history,
       message: text,
     })
@@ -1351,7 +1363,24 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       pending: false,
       text: res.value.text,
       proposals: res.value.proposals.map((x) => ({ ...x, id: crypto.randomUUID(), state: 'pending' })),
+      comments: res.value.comments,
     }))
+    if (res.value.comments.length) update(pid, (q) => ({ ...q, comments: [...(q.comments ?? []), ...stamp(res.value.comments, 'chat')] }))
+  }
+
+  const setCommentDismissed = (pid: string, id: string, dismissed: boolean) =>
+    update(pid, (q) => ({ ...q, comments: q.comments?.map((c) => (c.id === id ? { ...c, dismissed } : c)) }))
+
+  const dismissComment = (id: string) => {
+    if (!selected) return
+    const pid = selected.id
+    setCommentDismissed(pid, id, true)
+    record(
+      'Dismissed comment',
+      pid,
+      () => setCommentDismissed(pid, id, false),
+      () => setCommentDismissed(pid, id, true),
+    )
   }
 
   // Settings → Data. Not undoable (the dialog confirms first); research still
@@ -1392,6 +1421,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       onTab={setTab}
       onClose={() => setRightOpen(false)}
       onAddRecipient={addRecipient}
+      onNote={(note) => update(selected.id, (p) => ({ ...p, note }))}
       onProposal={resolveProposal}
       onRevertProposal={revertProposal}
       onSend={sendChat}
@@ -1422,6 +1452,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       showPanelButtons={!(rightDocks && rightOpen)}
       pendingSuggestions={(activeChat(selected)?.messages ?? []).flatMap((m) => m.proposals ?? []).filter((x) => x.state === 'pending').length}
       onPanel={togglePanel}
+      onDismissComment={dismissComment}
     />
   ) : (
     <div className="flex h-full flex-col items-start justify-center gap-3 px-10">

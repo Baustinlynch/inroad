@@ -8,8 +8,12 @@ import type {
   ClaudeProgress,
   DraftRequest,
   DraftResult,
+  EmailComment,
+  EmailGuidance,
+  EventAnswersRequest,
   EventLookupRequest,
   EventLookupResult,
+  ParsedOrganisation,
   ProposedEdit,
   ResearchRequest,
   ResearchResult,
@@ -250,11 +254,38 @@ const BriefSchema = z.object({
 
 const MARKDOWN = `Blank line between paragraphs; a single newline is a line break (e.g. between sign-off lines). **bold** and *italic* sparingly, [link text](https://url) for links, "- " or "1. " for lists, "> " for quotes. No headings, tables, images or HTML.`
 
+const COMMENT_KINDS = `"verify" flags something the user should double-check before sending: a number, name, date or claim you couldn't confirm, or a guessed contact. "note" explains a choice, e.g. why you opened with a particular hook or why a detail is in there.`
+
+const CommentSchema = z.object({
+  quote: z
+    .string()
+    .describe('Exact text from the email body, copied verbatim (including markdown), within a single paragraph. Keep it short: the phrase the comment is about.'),
+  comment: z.string().describe('One short sentence for the user.'),
+  kind: z.enum(['verify', 'note']),
+})
+
+// Only keep comments whose quote really is in the body.
+const anchored = (body: string, comments: EmailComment[]) => comments.filter((c) => c.quote.trim() && body.includes(c.quote))
+
 const EmailFields = {
   to: z.string().describe('Email of the single best recipient, or empty string if none has an address.'),
   subject: z.string(),
   body: z.string().describe(`The email body in markdown. ${MARKDOWN}`),
+  comments: z
+    .array(CommentSchema)
+    .describe(`1–4 comments on specific phrases of the body, for the user reviewing it. ${COMMENT_KINDS} Flag anything uncertain; skip the obvious.`),
 }
+
+// The campaign's email format and the user's note about this organisation:
+// firm requirements, unlike the softer campaign notes and voice.
+function guidanceSections(req: EmailGuidance & { company: string }) {
+  return [
+    req.emailFormat?.trim() ? `<email_format>\nEvery email in this campaign must follow this:\n${req.emailFormat.trim()}\n</email_format>` : '',
+    req.orgNote?.trim() ? `<user_instructions organisation="${req.company}">\n${req.orgNote.trim()}\n</user_instructions>` : '',
+  ].filter(Boolean)
+}
+
+const GUIDANCE_RULE = `If there's an email format, follow its structure and include everything it asks for. If the user gave instructions for this organisation, follow them exactly; they override the campaign notes, the format and your own judgement where they conflict.`
 
 const ResearchDraftSchema = z.object({
   research_notes: z.string().describe('Everything useful you found, each fact with its source URL. Kept so the email can be rewritten later without searching again.'),
@@ -262,7 +293,7 @@ const ResearchDraftSchema = z.object({
   ...EmailFields,
 })
 
-const WRITING_RULES = `Write the email exactly as the user writes: follow their style notes, and treat the examples (Claude's draft vs. what they actually sent) as the strongest signal of their preferences. Use only facts from your research; never invent details, numbers, people or email addresses. Open with something specific to this organisation, make one clear ask drawn from the campaign notes, and keep it short enough to read on a phone. Address the best recipient by first name when you have one.`
+const WRITING_RULES = `Write the email exactly as the user writes: follow their style notes, and treat the examples (Claude's draft vs. what they actually sent) as the strongest signal of their preferences. Use only facts from your research; never invent details, numbers, people or email addresses. Open with something specific to this organisation, make one clear ask drawn from the campaign notes, and keep it short enough to read on a phone. Address the best recipient by first name when you have one. ${GUIDANCE_RULE}`
 
 const RESEARCH_SYSTEM = `You research an organisation and write the user a personalised first-contact email to it. The user's campaign notes say what they're reaching out about and what to look for.
 
@@ -296,6 +327,7 @@ export async function researchAndDraft(cfg: OpencodeConfig, req: ResearchRequest
     const prompt = [
       RESEARCH_SYSTEM,
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
+      ...guidanceSections(req),
       voiceSection(req.voice),
       `<sender>${req.senderName || 'the user'}</sender>`,
       `Organisation: ${req.company}${req.website ? ` (website: ${req.website})` : ''}`,
@@ -308,7 +340,10 @@ export async function researchAndDraft(cfg: OpencodeConfig, req: ResearchRequest
     })
     emit({ jobId: req.jobId, kind: 'step', text: 'Writing draft' })
     const out = parseJson(ResearchDraftSchema, text)
-    return { research: out.research_notes, draft: { brief: out.brief, to: out.to, subject: out.subject, body: out.body } }
+    return {
+      research: out.research_notes,
+      draft: { brief: out.brief, to: out.to, subject: out.subject, body: out.body, comments: anchored(out.body, out.comments) },
+    }
   })
 }
 
@@ -321,6 +356,7 @@ export async function draft(cfg: OpencodeConfig, req: DraftRequest): Promise<Res
     const prompt = [
       `You write first-contact outreach emails for the user, from research that's already been done. Also turn the research into a brief for the user to skim, and pick the best recipient. Do not use any tools.\n\n${WRITING_RULES}`,
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
+      ...guidanceSections(req),
       voiceSection(req.voice),
       `<sender>${req.senderName || 'the user'}</sender>`,
       `<organisation>${req.company}</organisation>`,
@@ -329,47 +365,58 @@ export async function draft(cfg: OpencodeConfig, req: DraftRequest): Promise<Res
         ? `Write a fresh version that takes a noticeably different angle from this previous draft:\n<previous_draft>\n${req.previousDraft}\n</previous_draft>`
         : 'Write the brief and the email.',
     ].join('\n\n')
-    const text = await run(cfg, prompt + withJsonSchema(DraftSchema))
-    return parseJson(DraftSchema, text)
+    const out = parseJson(DraftSchema, await run(cfg, prompt + withJsonSchema(DraftSchema)))
+    return { ...out, comments: anchored(out.body, out.comments) }
   })
 }
 
 // ------------------------------------------------------------------- chat
 
-const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes and the user's voice.
+const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes, any email format and instructions for this organisation, and the user's voice. Keep the email within the format and instructions unless the user asks otherwise.
 
 The email body is markdown, exactly as stored: ${MARKDOWN} Links and formatting are part of the text you see and can change.
 
-To change the email, quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Prefer a few focused edits over rewriting everything, and stay in the user's voice. Only search the web if the user asks for something the brief doesn't cover. Keep your messages short.
+To change the email, quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Prefer a few focused edits over rewriting everything, and stay in the user's voice. When the user asks what you think, wants something checked, or asks why something is there, pin a comment to the phrase it's about rather than only describing it in your reply. Don't repeat comments the email already has. Only search the web if the user asks for something the brief doesn't cover. Keep your messages short.
 
-When you have edits, end your reply with ONE fenced JSON block in exactly this shape and nothing after it:
+When you have edits or comments, end your reply with ONE fenced JSON block in exactly this shape and nothing after it:
 \`\`\`json
-{"edits":[{"old":"text to replace","new":"replacement text","reason":"a few words on why"}]}
+{"edits":[{"old":"text to replace","new":"replacement text","reason":"a few words on why"}],"comments":[{"quote":"text from the body","comment":"one short sentence","kind":"verify"}]}
 \`\`\`
-Each "old" must appear verbatim in the subject or body. If you don't want to change anything, omit the block entirely. The block is machine-read: don't refer to it in your prose.
+Each "old" must appear verbatim in the subject or body, and each comment's "quote" must appear verbatim in the body. Omit either array when it's empty. If you don't want to change anything, omit the block entirely. The block is machine-read: don't refer to it in your prose.
 
 Reply directly as the assistant. If you're running as a read-only or plan agent, don't mention that, don't announce modes, and don't list the edits in prose — just make the changes via the block.`
 
 const EditSchema = z.object({ old: z.string().min(1), new: z.string().min(1), reason: z.string() })
-const EditsSchema = z.object({ edits: z.array(EditSchema) })
+const EditsSchema = z.object({
+  edits: z.array(EditSchema).default([]),
+  comments: z.array(CommentSchema).default([]),
+})
 
 // Pulls the trailing edits block out of the reply, keeping only edits whose
 // quoted text really exists in the email (the same check the Claude backend does).
-function takeEdits(text: string, subject: string, body: string): { text: string; proposals: ProposedEdit[] } {
+function takeEdits(
+  text: string,
+  subject: string,
+  body: string,
+): { text: string; proposals: ProposedEdit[]; comments: EmailComment[] } {
   const re = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/gi
   let match: RegExpExecArray | null
   let last: RegExpExecArray | null = null
   while ((match = re.exec(text))) last = match
-  if (!last) return { text: text.trim(), proposals: [] }
+  if (!last) return { text: text.trim(), proposals: [], comments: [] }
   let proposals: ProposedEdit[] = []
+  let comments: EmailComment[] = []
   try {
     const parsed = EditsSchema.safeParse(JSON.parse(last[1]))
-    if (parsed.success) proposals = parsed.data.edits.filter((e) => body.includes(e.old) || subject.includes(e.old))
+    if (parsed.success) {
+      proposals = parsed.data.edits.filter((e) => body.includes(e.old) || subject.includes(e.old))
+      comments = anchored(body, parsed.data.comments)
+    }
   } catch {
-    return { text: text.trim(), proposals: [] }
+    return { text: text.trim(), proposals: [], comments: [] }
   }
   const cleaned = (text.slice(0, last.index) + text.slice(last.index + last[0].length)).trim()
-  return { text: cleaned, proposals }
+  return { text: cleaned, proposals, comments }
 }
 
 export async function chat(cfg: OpencodeConfig, req: ChatRequest, emit: Emit): Promise<Result<ChatResult>> {
@@ -377,7 +424,11 @@ export async function chat(cfg: OpencodeConfig, req: ChatRequest, emit: Emit): P
     const context = [
       CHAT_SYSTEM,
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
+      ...guidanceSections(req),
       voiceSection(req.voice),
+      req.comments?.length
+        ? `<comments_on_email>\n${req.comments.map((c) => `- [${c.kind}] "${c.quote}": ${c.comment}`).join('\n')}\n</comments_on_email>`
+        : '',
       req.brief ? `<brief organisation="${req.company}">\n${JSON.stringify(req.brief)}\n</brief>` : '',
       `<email>\nSubject: ${req.subject}\n\n${req.body}\n</email>`,
     ]
@@ -395,8 +446,8 @@ export async function chat(cfg: OpencodeConfig, req: ChatRequest, emit: Emit): P
       },
     })
     const full = text.trim() || streamed.trim()
-    const { text: reply, proposals } = takeEdits(full, req.subject, req.body)
-    return { text: reply, proposals }
+    const { text: reply, proposals, comments } = takeEdits(full, req.subject, req.body)
+    return { text: reply, proposals, comments }
   })
 }
 
@@ -427,9 +478,18 @@ const EventSchema = z.object({
   details: z
     .string()
     .describe(
-      'Plain-text notes about the event for writing outreach emails: what it is, dates, place, who attends and how many, history and past numbers, what the organisers are asking partners for (tiers, prices, perks), who runs it, links. Short lines, no markdown headings. Say "unknown" rather than guessing.',
+      'Plain-text notes about the event for writing outreach emails: what it is, dates, place, who attends and how many, history and past numbers, what the organisers are asking partners for (tiers, prices, perks), who runs it, links. Short lines, no markdown headings.',
     ),
-  sources: z.array(z.string()).describe('Where each detail came from, e.g. a URL or the page title.'),
+  questions: z
+    .array(
+      z.object({
+        question: z.string().describe('One short question for the user.'),
+        options: z.array(z.string()).describe('2–4 likely answers (e.g. the conflicting values you found), or [] if open-ended.'),
+      }),
+    )
+    .describe(
+      'Up to 4 questions about things only the user can settle and that matter for outreach: conflicting figures, or a key fact you couldn’t find (dates, place, what they’re asking for). [] if none.',
+    ),
 })
 
 export async function lookupEvent(cfg: OpencodeConfig, req: EventLookupRequest, emit: Emit): Promise<Result<EventLookupResult>> {
@@ -440,7 +500,9 @@ export async function lookupEvent(cfg: OpencodeConfig, req: EventLookupRequest, 
 
 Search the web for the event: its own site and social posts, who runs it, dates, venue, who attends and roughly how many, past editions and numbers, and what organisers ask partners for. Only read pages; never submit a form, post, sign up or change anything. Stop once you have a clear picture; a dozen or so page reads is plenty.
 
-Only report what you found. If sources disagree, prefer the most recent and say so. If you find nothing, say that in the details.`,
+Only report what you found. If sources disagree on something that matters, don't explain it in the details: ask the user instead. If you find nothing, leave the details empty and ask what the event is. Never write "unknown": leave a fact out, or ask about it if it matters.
+
+Leave out: sources, citations and where you found anything; outreach already sent or drafted and sponsors already confirmed; other people working on the event and their contact details; internal logistics (insurance, budget, hire agreements, to-dos); notes about tools or access. Public links to the event's own site or social pages are fine.`,
       `Event: ${req.name}${req.hint ? `\nWhat the user added: ${req.hint}` : ''}`,
     ].join('\n\n')
     const text = await run(cfg, prompt + withJsonSchema(EventSchema), {
@@ -449,7 +511,23 @@ Only report what you found. If sources disagree, prefer the most recent and say 
         if (step) emit({ jobId: req.jobId, kind: 'step', text: step })
       },
     })
-    return parseJson(EventSchema, text)
+    const out = parseJson(EventSchema, text)
+    return { details: out.details, questions: out.questions.filter((q) => q.question.trim()).slice(0, 4) }
+  })
+}
+
+// Folds the user's answers into the event details, leaving the rest alone.
+export async function applyEventAnswers(cfg: OpencodeConfig, req: EventAnswersRequest): Promise<Result<{ details: string }>> {
+  return guard(async () => {
+    const qa = req.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')
+    const prompt = [
+      `Update the event details with the user's answers to your questions. Change only what the answers affect: add or correct those facts in the same "Label: value" style, and keep every other line exactly as it is, including anything the user wrote themselves. Return the whole updated text. Do not use any tools.`,
+      `<event>${req.name}</event>`,
+      `<details>\n${req.details}\n</details>`,
+      `<answers>\n${qa}\n</answers>`,
+    ].join('\n\n')
+    const text = await run(cfg, prompt + withJsonSchema(z.object({ details: z.string() })))
+    return parseJson(z.object({ details: z.string() }), text)
   })
 }
 
@@ -468,6 +546,33 @@ export async function writingRules(cfg: OpencodeConfig, req: WritingRulesRequest
     ].join('\n\n')
     const text = await run(cfg, prompt + withJsonSchema(RulesSchema))
     return { notes: parseJson(RulesSchema, text).notes.slice(0, 10) }
+  })
+}
+
+// ------------------------------------------------- adding organisations
+
+const OrganisationsSchema = z.object({
+  organisations: z.array(
+    z.object({
+      name: z.string().describe('The organisation’s name, as you’d search for it.'),
+      website: z.string().describe('Its website if the user gave one (domain or URL), otherwise "".'),
+      note: z.string().describe('Everything the user said that applies to this organisation, as a short instruction in their words. "" if nothing.'),
+    }),
+  ),
+})
+
+// Turns whatever the user typed ("Canva and Atlassian, both formal. PCBWay —
+// mention Campfire…") into a list of organisations with their own notes.
+export async function parseOrganisations(cfg: OpencodeConfig, text: string): Promise<Result<ParsedOrganisation[]>> {
+  return guard(async () => {
+    const prompt = [
+      `The user is listing organisations they want to email, in their own words. List each organisation once, in the order given.
+
+For each, keep any website they gave, and put everything they said about it in "note" as a short instruction in their words (e.g. "Mention they sponsored Campfire; ask for about 40 badges"). If something applies to several organisations ("both formal", "all of these are local"), add it to each one's note, reworded to stand alone ("Formal", not "Both formal"). Notes are instructions for writing or researching the email, so leave out the user's thinking aloud about whether to include one ("maybe", "not sure about this one"). A website alone isn't a note. Don't add anything they didn't say. Do not use any tools.`,
+      `<text>\n${text}\n</text>`,
+    ].join('\n\n')
+    const out = parseJson(OrganisationsSchema, await run(cfg, prompt + withJsonSchema(OrganisationsSchema)))
+    return out.organisations.map((o) => ({ name: o.name.trim(), website: o.website.trim(), note: o.note.trim() })).filter((o) => o.name)
   })
 }
 

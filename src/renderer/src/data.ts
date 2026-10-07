@@ -1,4 +1,4 @@
-import type { Attachment, Brief, DraftRef, Recipient } from '../../shared/api'
+import type { Attachment, Brief, DraftRef, EmailComment, Recipient } from '../../shared/api'
 
 export type { Attachment, Brief, Recipient }
 
@@ -17,10 +17,21 @@ export interface ChatMsg {
   role: 'user' | 'assistant'
   text: string
   proposals?: Proposal[]
+  // Comments this reply pinned to the email (also stored on the prospect).
+  comments?: EmailComment[]
   // Claude is still writing this reply.
   pending?: boolean
   // The reply failed; text holds the reason.
   error?: boolean
+}
+
+// One of Claude's comments on the email, pinned to a phrase.
+export interface Comment extends EmailComment {
+  id: string
+  // Written with the draft, or added in chat.
+  by: 'draft' | 'chat'
+  at: number
+  dismissed?: boolean
 }
 
 export interface Version {
@@ -48,6 +59,9 @@ export interface Prospect {
   company: string
   // Website, if given or found. Helps research find the right organisation.
   domain: string
+  // What the user said about this organisation ("mention they sponsored
+  // Campfire"). Claude follows it for research, drafting and chat.
+  note?: string
   status: Status
   progress: string[]
   error?: string
@@ -64,6 +78,7 @@ export interface Prospect {
   activeChatId?: string
   // Every draft Claude wrote, your edits before a regenerate, and each save.
   versions: Version[]
+  comments?: Comment[]
   // Soft delete: set when moved to Deleted items, cleared on restore.
   deletedAt?: number
   // The copy in the mailbox's Drafts folder, once saved there.
@@ -88,6 +103,9 @@ export interface Campaign {
   // Freeform: who you're contacting, what you're asking for, what to research,
   // tone. Read after the folder's notes for every email in the campaign.
   notes: string
+  // Structure and must-haves for every email in the campaign. Claude treats
+  // this as a requirement, unlike the notes.
+  format?: string
   // Added to every email in this campaign when it's saved to Drafts.
   attachments: Attachment[]
   // Which voice profile drafts in this campaign are written in.

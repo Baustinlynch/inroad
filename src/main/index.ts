@@ -83,7 +83,9 @@ app.whenReady().then(() => {
   ipcMain.handle('claude:chat', async (e, req) => ai.chat(await config(), req, emitTo(e.sender)))
   ipcMain.handle('claude:learnVoice', async (_e, req) => ai.learnVoice(await config(), req))
   ipcMain.handle('claude:lookupEvent', async (e, req) => ai.lookupEvent(await config(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:applyEventAnswers', async (_e, req) => ai.applyEventAnswers(await config(), req))
   ipcMain.handle('claude:writingRules', async (_e, req) => ai.writingRules(await config(), req))
+  ipcMain.handle('claude:parseOrganisations', async (_e, text: string) => ai.parseOrganisations(await config(), text))
   ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))
   ipcMain.handle('mail:saveDraft', (_e, draft: DraftInput) =>
     withMail(async (c) => {
