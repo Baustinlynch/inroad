@@ -1,11 +1,23 @@
 // Smoke test for src/main/claude.ts against the real Agent SDK. With no
 // ANTHROPIC_API_KEY it uses this machine's Claude Code sign-in.
-//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|parse|guided|comment|event <name>]
+//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|parse|guided|comment|answers|event <name>]
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chat, configureClaude, draft, isReadOnlyTool, learnVoice, lookupEvent, parseOrganisations, researchAndDraft, testClaude, writingRules } from '../src/main/claude'
+import {
+  applyEventAnswers,
+  chat,
+  configureClaude,
+  draft,
+  isReadOnlyTool,
+  learnVoice,
+  lookupEvent,
+  parseOrganisations,
+  researchAndDraft,
+  testClaude,
+  writingRules,
+} from '../src/main/claude'
 
 configureClaude({ workspace: mkdtempSync(join(tmpdir(), 'inroad-')), clientApp: 'inroad/test' })
 const key = process.env.INROAD_TEST_KEY // deliberately not ANTHROPIC_API_KEY
@@ -27,7 +39,8 @@ if (which === 'research') {
       jobId: 'j1',
       company: 'Cloudflare',
       website: 'cloudflare.com',
-      campaignNotes: 'Hack the Harbour 2026, a 48-hour student hackathon in Sydney, 14–16 Nov, ~400 hackers. Asking for sponsorship (Gold $5k with a prize track) or API credits + a workshop.',
+      campaignNotes:
+        'Hack the Harbour 2026, a 48-hour student hackathon in Sydney, 14–16 Nov, ~400 hackers. Asking for sponsorship (Gold $5k with a prize track) or API credits + a workshop.',
       voice,
       senderName: 'Jordan Ellis',
     },
@@ -35,16 +48,36 @@ if (which === 'research') {
   )
   if (!r.ok) throw new Error(r.error)
   console.log(`\n✓ research + draft in ${Math.round((Date.now() - t) / 1000)}s`)
-  console.log('  brief sections:', r.value.draft.brief.sections.map((s) => s.title))
-  console.log('  recipients:', r.value.draft.brief.recipients.map((x) => `${x.name} <${x.email || 'none'}> ${x.confidence}`))
+  console.log(
+    '  brief sections:',
+    r.value.draft.brief.sections.map((s) => s.title),
+  )
+  console.log(
+    '  recipients:',
+    r.value.draft.brief.recipients.map((x) => `${x.name} <${x.email || 'none'}> ${x.confidence}`),
+  )
   console.log('  sources:', r.value.draft.brief.sources.length, '| research notes chars:', r.value.research.length)
   console.log('  to:', r.value.draft.to, '| subject:', r.value.draft.subject)
   console.log('\n' + r.value.draft.body)
 }
 
 if (which === 'chat') {
-  const body = "Hi Priya,\n\nI'm Jordan from Hack the Harbour, a 48-hour student hackathon in Sydney.\n\nWould you be open to sponsoring our event?\n\nCheers,\nJordan"
-  const r = await chat(key, { jobId: 'c1', company: 'Lumen Labs', campaignNotes: 'Asking for sponsorship.', voice, subject: 'Sponsoring Hack the Harbour?', body, history: [], message: 'make the ask more casual and specific: Gold tier, $5k' }, log)
+  const body =
+    "Hi Priya,\n\nI'm Jordan from Hack the Harbour, a 48-hour student hackathon in Sydney.\n\nWould you be open to sponsoring our event?\n\nCheers,\nJordan"
+  const r = await chat(
+    key,
+    {
+      jobId: 'c1',
+      company: 'Lumen Labs',
+      campaignNotes: 'Asking for sponsorship.',
+      voice,
+      subject: 'Sponsoring Hack the Harbour?',
+      body,
+      history: [],
+      message: 'make the ask more casual and specific: Gold tier, $5k',
+    },
+    log,
+  )
   if (!r.ok) throw new Error(r.error)
   console.log('\n✓ chat:', r.value.text)
   console.log('  proposals:', r.value.proposals)
@@ -56,7 +89,8 @@ if (which === 'voice') {
   const r = await learnVoice(key, {
     voiceName: 'Jordan',
     notes: voice.notes,
-    draft: 'Hi Priya,\n\nI hope this email finds you well! I am reaching out regarding an exciting opportunity.\n\nWould you be open to a quick call?\n\nKind regards,\nJordan',
+    draft:
+      'Hi Priya,\n\nI hope this email finds you well! I am reaching out regarding an exciting opportunity.\n\nWould you be open to a quick call?\n\nKind regards,\nJordan',
     final: 'Hi Priya,\n\nQuick one from Hack the Harbour.\n\nKeen to jump on a 15-min call?\n\nCheers,\nJordan',
   })
   if (!r.ok) throw new Error(r.error)
@@ -66,7 +100,16 @@ if (which === 'voice') {
 if (which === 'tools') {
   for (const t of ['slack_search_public', 'search_email', 'read_thread', 'list_folders', 'fetch', 'get-overview', 'find-tasks'])
     assert.ok(isReadOnlyTool(t), `${t} should be allowed`)
-  for (const t of ['slack_send_message', 'slack_send_message_draft', 'draft_email', 'delete_email', 'update-tasks', 'add-comments', 'ha_call_service', 'search_and_delete'])
+  for (const t of [
+    'slack_send_message',
+    'slack_send_message_draft',
+    'draft_email',
+    'delete_email',
+    'update-tasks',
+    'add-comments',
+    'ha_call_service',
+    'search_and_delete',
+  ])
     assert.ok(!isReadOnlyTool(t), `${t} should be denied`)
   console.log('✓ connector tool filter allows reads and blocks writes')
 }
@@ -89,7 +132,7 @@ if (which === 'event') {
   if (!r.ok) throw new Error(r.error)
   console.log(`\n✓ event lookup in ${Math.round((Date.now() - t) / 1000)}s`)
   console.log(r.value.details)
-  console.log('  sources:', r.value.sources)
+  console.log('\nquestions:', JSON.stringify(r.value.questions, null, 1))
 }
 
 if (which === 'parse') {
@@ -119,14 +162,51 @@ if (which === 'guided') {
   const words = body.split(/\s+/).filter(Boolean).length
   console.log('comments:', r.value.comments)
   for (const c of r.value.comments) assert.ok(body.includes(c.quote), 'comment quotes text in the body')
-  console.log({ words, mentionsCampfire: /campfire/i.test(body), asksFor40: /40/.test(body), hasLink: body.includes('haven.hackclub.com/canberra'), endsWithQuestion: /\?\s*(\n.*){0,4}$/.test(body.trim()) })
+  console.log({
+    words,
+    mentionsCampfire: /campfire/i.test(body),
+    asksFor40: /40/.test(body),
+    hasLink: body.includes('haven.hackclub.com/canberra'),
+    endsWithQuestion: /\?\s*(\n.*){0,4}$/.test(body.trim()),
+  })
 }
 
 if (which === 'comment') {
-  const body = "Hi Priya,\n\nI'm Jordan from Hack the Harbour, a 48-hour student hackathon in Sydney with around 400 hackers.\n\nLumen's vision API launched in March and would be a great fit.\n\nKeen to chat?\n\nCheers,\nJordan"
-  const r = await chat(key, { jobId: 'c2', company: 'Lumen Labs', campaignNotes: 'Asking for sponsorship.', voice, subject: 'Hack the Harbour', body, history: [], message: 'anything in here I should double check before sending?' }, log)
+  const body =
+    "Hi Priya,\n\nI'm Jordan from Hack the Harbour, a 48-hour student hackathon in Sydney with around 400 hackers.\n\nLumen's vision API launched in March and would be a great fit.\n\nKeen to chat?\n\nCheers,\nJordan"
+  const r = await chat(
+    key,
+    {
+      jobId: 'c2',
+      company: 'Lumen Labs',
+      campaignNotes: 'Asking for sponsorship.',
+      voice,
+      subject: 'Hack the Harbour',
+      body,
+      history: [],
+      message: 'anything in here I should double check before sending?',
+    },
+    log,
+  )
   if (!r.ok) throw new Error(r.error)
   console.log('\n✓ chat:', r.value.text)
   console.log('  comments:', r.value.comments)
   assert.ok(r.value.comments.length > 0, 'expected add_comment calls')
+}
+
+if (which === 'answers') {
+  const details =
+    "What it is: Haven Canberra, a free two-day game jam for teens.\nDates: Saturday 14 and Sunday 15 November 2026\nPlace: Canberra, ACT\nMy own note: we're keen on local studios."
+  const r = await applyEventAnswers(key, {
+    name: 'Haven Canberra',
+    details,
+    answers: [
+      { question: 'What should emails say about the venue?', answer: "Just say 'Canberra' for now" },
+      { question: 'What are the start and finish times each day?', answer: '10am to 6pm both days' },
+    ],
+  })
+  if (!r.ok) throw new Error(r.error)
+  console.log(r.value.details)
+  assert.ok(r.value.details.includes("My own note: we're keen on local studios."), 'keeps the user’s own line')
+  assert.ok(/10\s?am/i.test(r.value.details), 'adds the times')
 }

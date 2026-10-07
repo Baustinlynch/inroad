@@ -7,6 +7,7 @@ import type {
   ClaudeProgress,
   DraftRequest,
   DraftResult,
+  EventAnswersRequest,
   EventLookupRequest,
   EmailComment,
   EmailGuidance,
@@ -415,13 +416,36 @@ const connectorName = (tool: string) =>
     .replace(/_/g, ' ') ?? tool
 
 const EventSchema = z.object({
-  details: z
-    .string()
+  facts: z
+    .array(z.object({ label: z.string().describe('Short label, e.g. "What it is", "Dates", "Place", "Who comes", "What we ask for".'), value: z.string() }))
     .describe(
-      'Plain-text notes about the event for writing outreach emails: what it is, dates, place, who attends and how many, history and past numbers, what the organisers are asking partners for (tiers, prices, perks), who runs it, links. Short lines, no markdown headings. Say "unknown" rather than guessing.',
+      'What a partner reading an outreach email should know about the event, most important first. Only facts you found; leave out anything unknown or unsettled.',
     ),
-  sources: z.array(z.string()).describe('Where the details came from, e.g. "Slack #sponsorship", "Email from Sam, 3 Sep", or a URL.'),
+  questions: z
+    .array(
+      z.object({
+        question: z.string().describe('One short question for the user.'),
+        options: z.array(z.string()).describe('2–4 likely answers (e.g. the conflicting values you found), or [] if open-ended.'),
+      }),
+    )
+    .describe(
+      'Up to 4 questions about things only the user can settle and that matter for outreach: conflicting figures, or a key fact you couldn’t find (dates, place, what they’re asking for). [] if none.',
+    ),
 })
+
+const EVENT_EXCLUDE = `Only include facts about the event itself that would help write outreach emails. Leave out:
+- sources, citations, links to Slack channels or internal docs, and where you found anything
+- outreach already sent or drafted, sponsors or partners already confirmed, and venues already approached or ruled out
+- other people working on the event, and anyone's contact details
+- internal logistics and discussion (insurance, budget, hire agreements, to-dos)
+- notes about tools, connectors or access
+Public links (the event's website or social pages) are fine. Never write "unknown": leave it out, or ask about it if it matters.`
+
+const asDetails = (facts: { label: string; value: string }[]) =>
+  facts
+    .filter((f) => f.label.trim() && f.value.trim())
+    .map((f) => `${f.label.trim()}: ${f.value.trim()}`)
+    .join('\n')
 
 export async function lookupEvent(apiKey: string | undefined, req: EventLookupRequest, emit: Emit): Promise<Result<EventLookupResult>> {
   return guard(async () => {
@@ -433,14 +457,16 @@ export async function lookupEvent(apiKey: string | undefined, req: EventLookupRe
 
 Look in their connected tools first: search their Slack, email, docs, notes or task manager for the event name and read the most relevant threads or documents. Then check the web for a public page. Only use tools to read and search; never send, post, create or change anything. Stop once you have a clear picture; a dozen or so tool calls is plenty.
 
-Only report what you found. If sources disagree, prefer the most recent and say so. If you find nothing, say that in the details.`,
+Only report what you found. If sources disagree on something that matters, don't explain it in the facts: ask the user instead. If you find nothing, return no facts and ask what the event is.
+
+${EVENT_EXCLUDE}`,
         tools: ['WebSearch', 'WebFetch', 'ToolSearch'],
-        allowedTools: ['WebSearch', 'WebFetch', 'ToolSearch'],
-        // Connector tools come to canUseTool instead of being auto-denied.
+        // Every tool call comes to canUseTool: the built-ins above, plus
+        // connector tools only if they look read-only.
         permissionMode: 'default',
         settings: { disableClaudeAiConnectors: false },
         canUseTool: async (toolName, input) =>
-          toolName.startsWith('mcp__') && isReadOnlyTool(toolName.split('__').at(-1) ?? '')
+          ['WebSearch', 'WebFetch', 'ToolSearch'].includes(toolName) || (toolName.startsWith('mcp__') && isReadOnlyTool(toolName.split('__').at(-1) ?? ''))
             ? { behavior: 'allow', updatedInput: input }
             : { behavior: 'deny', message: 'Inroad only lets you read and search here, not change anything.' },
         effort: 'medium',
@@ -458,7 +484,26 @@ Only report what you found. If sources disagree, prefer the most recent and say 
         }
       },
     )
-    return parseOutput(EventSchema, result.structured_output)
+    const out = parseOutput(EventSchema, result.structured_output)
+    return { details: asDetails(out.facts), questions: out.questions.filter((q) => q.question.trim()).slice(0, 4) }
+  })
+}
+
+// Folds the user's answers into the event details, leaving the rest alone.
+export async function applyEventAnswers(apiKey: string | undefined, req: EventAnswersRequest): Promise<Result<{ details: string }>> {
+  return guard(async () => {
+    const qa = req.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')
+    const result = await run(
+      `<event>${req.name}</event>\n\n<details>\n${req.details}\n</details>\n\n<answers>\n${qa}\n</answers>`,
+      baseOptions(apiKey, {
+        systemPrompt: `Update the event details with the user's answers to your questions. Change only what the answers affect: add or correct those facts in the same "Label: value" style, and keep every other line exactly as it is, including anything the user wrote themselves. Return the whole updated text.`,
+        tools: [],
+        effort: 'low',
+        maxTurns: 3,
+        ...structured(z.object({ details: z.string() })),
+      }),
+    )
+    return parseOutput(z.object({ details: z.string() }), result.structured_output)
   })
 }
 

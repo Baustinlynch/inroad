@@ -82,6 +82,7 @@ app.whenReady().then(() => {
   ipcMain.handle('claude:chat', async (e, req) => claude.chat(await key(), req, emitTo(e.sender)))
   ipcMain.handle('claude:learnVoice', async (_e, req) => claude.learnVoice(await key(), req))
   ipcMain.handle('claude:lookupEvent', async (e, req) => claude.lookupEvent(await key(), req, emitTo(e.sender)))
+  ipcMain.handle('claude:applyEventAnswers', async (_e, req) => claude.applyEventAnswers(await key(), req))
   ipcMain.handle('claude:writingRules', async (_e, req) => claude.writingRules(await key(), req))
   ipcMain.handle('claude:parseOrganisations', async (_e, text: string) => claude.parseOrganisations(await key(), text))
   ipcMain.handle('mail:test', () => withMail((c) => testMail(c)))

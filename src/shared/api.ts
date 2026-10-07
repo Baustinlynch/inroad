@@ -117,11 +117,24 @@ export interface EventLookupRequest {
   hint?: string
 }
 
+// Something only the user can settle, e.g. two sources disagree.
+export interface EventQuestion {
+  question: string
+  // Likely answers to pick from; the user can also type their own.
+  options: string[]
+}
+
 export interface EventLookupResult {
-  // Notes for the campaign: dates, place, audience, numbers, what's being asked for.
+  // Context for every email: one "Label: value" line per fact.
   details: string
-  // Where each part came from, e.g. "Slack #organisers", a URL.
-  sources: string[]
+  questions: EventQuestion[]
+}
+
+export interface EventAnswersRequest {
+  name: string
+  // The current shared context (may include the user's own text).
+  details: string
+  answers: { question: string; answer: string }[]
 }
 
 // Onboarding: style notes drawn from emails the user wrote.
@@ -222,6 +235,8 @@ export interface InroadApi {
     chat: (req: ChatRequest) => Promise<Result<ChatResult>>
     learnVoice: (req: VoiceLearnRequest) => Promise<Result<VoiceLearnResult>>
     lookupEvent: (req: EventLookupRequest) => Promise<Result<EventLookupResult>>
+    // Folds the user's answers into the details.
+    applyEventAnswers: (req: EventAnswersRequest) => Promise<Result<{ details: string }>>
     writingRules: (req: WritingRulesRequest) => Promise<Result<{ notes: string[] }>>
     parseOrganisations: (text: string) => Promise<Result<ParsedOrganisation[]>>
     // Subscribe to progress for running requests; returns an unsubscribe function.

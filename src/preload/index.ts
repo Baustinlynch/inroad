@@ -18,6 +18,7 @@ const api: InroadApi = {
     chat: (req) => ipcRenderer.invoke('claude:chat', req),
     learnVoice: (req) => ipcRenderer.invoke('claude:learnVoice', req),
     lookupEvent: (req) => ipcRenderer.invoke('claude:lookupEvent', req),
+    applyEventAnswers: (req) => ipcRenderer.invoke('claude:applyEventAnswers', req),
     writingRules: (req) => ipcRenderer.invoke('claude:writingRules', req),
     parseOrganisations: (text) => ipcRenderer.invoke('claude:parseOrganisations', text),
     onProgress: (cb) => {
