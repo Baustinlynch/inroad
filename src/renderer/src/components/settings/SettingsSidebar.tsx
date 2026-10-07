@@ -44,7 +44,7 @@ export type SettingsPage =
 export const GENERAL_PAGES: { kind: Exclude<SettingsPage['kind'], 'folder' | 'campaign' | 'voice'>; title: string; Icon: LucideIcon }[] = [
   { kind: 'mailbox', title: 'Mailbox', Icon: Mail },
   { kind: 'email', title: 'Email style', Icon: Type },
-  { kind: 'claude', title: 'Claude', Icon: Bot },
+  { kind: 'claude', title: 'AI agent', Icon: Bot },
   { kind: 'appearance', title: 'Appearance', Icon: Palette },
   { kind: 'shortcuts', title: 'Keyboard shortcuts', Icon: Keyboard },
   { kind: 'trash', title: 'Deleted items', Icon: Trash2 },

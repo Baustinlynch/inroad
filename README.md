@@ -43,9 +43,11 @@ Run `Inroad-x.y.z-windows-setup.exe`. When SmartScreen says "Windows protected y
 
 Inroad walks you through this the first time you open it.
 
-- **Claude:** setup asks how to connect. Inroad uses the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so if you're logged in to Claude Code on your computer it uses those credentials. If you haven't signed in yet, install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal and log in. Or use an Anthropic API key instead (also in Settings → Claude).
-- **Mailbox:** in Settings → Mailbox, enter your IMAP details and an app password (most providers require one). Passwords and keys are stored in your system keychain.
-- **Event lookup:** "Find details" can search connectors on your Claude account (Slack, email, docs) as well as the web. It only uses tools that read; anything that sends or changes data is blocked.
+- **AI agent:** setup asks which agent to use.
+  - **Claude:** Inroad uses the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so if you're logged in to Claude Code on your computer it uses those credentials. If you haven't signed in yet, install [Claude Code](https://claude.com/claude-code), run `claude` once in a terminal and log in. Or use an Anthropic API key instead (also in Settings → AI agent).
+  - **opencode:** Inroad runs the [opencode](https://opencode.ai) CLI installed on your computer, using your own providers, models and agents. Set the opencode path, model and agent in Settings → AI agent. Leave the agent blank to use `inroad`, which can only search the web and read pages.
+- **Mailbox:** in Settings → Mailbox, enter your IMAP details and an app password (most providers require one). Passwords and keys are stored in your system keychain; if your computer has no keychain (some Linux setups), Inroad says so and stores them unencrypted in its settings file, readable only by your user account.
+- **Event lookup:** "Find details" searches the web. With Claude it can also search connectors on your Claude account (Slack, email, docs). It only uses tools that read; anything that sends or changes data is blocked.
 
 Everything you write in Inroad is stored locally on your computer.
 

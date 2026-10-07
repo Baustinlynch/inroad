@@ -2,14 +2,14 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { Check, CircleAlert, KeyRound, Loader2, Terminal } from 'lucide-react'
+import { Check, CircleAlert, KeyRound, Loader2, Terminal, Wand2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { PublicSettings } from '../../../shared/api'
 
-type Choice = 'login' | 'key'
+type Choice = 'login' | 'key' | 'opencode'
 
-// Setup step: how Inroad talks to Claude. Checks the connection before moving
-// on, but lets the user continue anyway (they can fix it later in Settings).
+// Setup step: how Inroad talks to an AI agent. Checks the connection before
+// moving on, but lets the user continue anyway (they can fix it later in Settings).
 export function ClaudeSetupDialog({
   open,
   onOpenChange,
@@ -31,10 +31,10 @@ export function ClaudeSetupDialog({
 
   useEffect(() => {
     if (!open) return
-    setChoice(settings?.hasAnthropicKey ? 'key' : 'login')
+    setChoice(settings?.aiProvider === 'opencode' ? 'opencode' : settings?.hasAnthropicKey ? 'key' : 'login')
     setError('')
     setKey('')
-  }, [open, settings?.hasAnthropicKey])
+  }, [open, settings?.hasAnthropicKey, settings?.aiProvider])
 
   const pick = (c: Choice) => {
     setChoice(c)
@@ -46,9 +46,13 @@ export function ClaudeSetupDialog({
     setBusy(true)
     setError('')
     try {
-      // Choosing the login clears any saved key, since a key takes priority.
-      if (choice === 'login' && settings?.hasAnthropicKey) onSettings(await window.api.settings.set({ anthropicKey: '' }))
-      if (choice === 'key' && key.trim()) onSettings(await window.api.settings.set({ anthropicKey: key.trim() }))
+      if (choice === 'opencode') onSettings(await window.api.settings.set({ aiProvider: 'opencode' }))
+      else {
+        // Choosing a Claude option switches back to Claude; a login clears any key.
+        if (settings?.aiProvider === 'opencode') onSettings(await window.api.settings.set({ aiProvider: 'claude' }))
+        if (choice === 'login' && settings?.hasAnthropicKey) onSettings(await window.api.settings.set({ anthropicKey: '' }))
+        if (choice === 'key' && key.trim()) onSettings(await window.api.settings.set({ anthropicKey: key.trim() }))
+      }
       const res = await window.api.claude.test()
       if (res.ok) return onDone()
       setError(res.error)
@@ -57,20 +61,19 @@ export function ClaudeSetupDialog({
     }
   }
 
-  const canCheck = choice === 'login' || !!key.trim() || !!settings?.hasAnthropicKey
+  const canCheck = choice !== 'key' || !!key.trim() || !!settings?.hasAnthropicKey
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Connect Claude</DialogTitle>
+          <DialogTitle>Connect an AI agent</DialogTitle>
           <DialogDescription>
-            Claude researches each organisation, drafts your emails and powers the chat. If you’re logged in to Claude Code on this computer, Inroad uses those
-            credentials, so it runs on your Claude plan.
+            Inroad uses an AI agent to research organisations, draft your emails and power the chat. Pick how to connect — you can change this later in Settings.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-2" role="radiogroup" aria-label="How Inroad connects to Claude">
+        <div className="grid gap-2" role="radiogroup" aria-label="How Inroad connects to an AI agent">
           <Option
             selected={choice === 'login'}
             onSelect={() => pick('login')}
@@ -99,18 +102,37 @@ export function ClaudeSetupDialog({
             }
           >
             {choice === 'key' && (
-              <Input
-                autoFocus
-                type="password"
-                autoComplete="off"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && canCheck && check()}
-                placeholder={settings?.hasAnthropicKey ? 'Saved — type to replace' : 'sk-ant-…'}
-                className="mt-2"
-              />
+              <>
+                <Input
+                  autoFocus
+                  type="password"
+                  autoComplete="off"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && canCheck && check()}
+                  placeholder={settings?.hasAnthropicKey ? 'Saved — type to replace' : 'sk-ant-…'}
+                  className="mt-2"
+                />
+                {settings && !settings.secureStorage && (
+                  <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-300">
+                    No system keychain found — the key will be saved unencrypted in Inroad’s settings file.
+                  </p>
+                )}
+              </>
             )}
           </Option>
+          <Option
+            selected={choice === 'opencode'}
+            onSelect={() => pick('opencode')}
+            icon={<Wand2 />}
+            title="Use opencode"
+            description={
+              <>
+                Runs the opencode CLI installed on this computer, with your own providers and models. Configure the path, model and agent in Settings → AI
+                agent.
+              </>
+            }
+          />
         </div>
 
         {error && (
@@ -118,7 +140,7 @@ export function ClaudeSetupDialog({
             <CircleAlert className="mt-0.5 size-4 shrink-0" /> {error}
           </p>
         )}
-        {!desktop && <p className="text-sm text-muted-foreground">Claude only connects in the desktop app.</p>}
+        {!desktop && <p className="text-sm text-muted-foreground">AI agents only connect in the desktop app.</p>}
 
         <DialogFooter>
           {error && (

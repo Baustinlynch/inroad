@@ -12,11 +12,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Check, CircleAlert, Loader2, Trash2 } from 'lucide-react'
+import { Check, CircleAlert, Loader2, Trash2, TriangleAlert } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import type { MailSettings, PublicSettings } from '../../../../shared/api'
 import { emailHtml, emailStyleVars, type EmailStyle } from '../../markdown'
-import { GLOBAL_SHORTCUTS, NAV_SHORTCUTS } from '../CommandPalette'
+import { globalShortcuts, NAV_SHORTCUTS } from '../CommandPalette'
+import { agentName, useAgentName } from '../../agent'
 import { Keys } from '../hint'
 import { SettingsBlock, SettingsRow, SettingsSection } from './layout'
 
@@ -29,6 +30,21 @@ function StatusLine({ status }: { status: Status }) {
       {status.ok ? <Check className="mt-0.5 size-4 shrink-0" /> : <CircleAlert className="mt-0.5 size-4 shrink-0" />}
       {status.message}
     </p>
+  )
+}
+
+// Shown when the OS has no keychain, so the user knows secrets aren't encrypted.
+function InsecureStorageNotice() {
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+      <p className="flex items-start gap-2">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>
+          This computer has no system keychain, so your password or key is saved unencrypted in Inroad’s settings file (readable only by your user account).
+          Install a keychain service (e.g. gnome-keyring or kwallet) to encrypt it.
+        </span>
+      </p>
+    </div>
   )
 }
 
@@ -102,8 +118,9 @@ export function MailboxForm({ settings, onSaved }: { settings: PublicSettings | 
 
   return (
     <div className="space-y-6">
+      {settings && !settings.secureStorage && <InsecureStorageNotice />}
       <SettingsSection title="You">
-        <SettingsRow title="Name" description="Shown as the sender, and how Claude signs off." htmlFor="fromName">
+        <SettingsRow title="Name" description={`Shown as the sender, and how ${agentName(settings?.aiProvider)} signs off.`} htmlFor="fromName">
           <Input
             id="fromName"
             className="w-64"
@@ -162,7 +179,11 @@ export function MailboxForm({ settings, onSaved }: { settings: PublicSettings | 
         <SettingsRow title="Username" description="Usually your email address." htmlFor="user">
           <Input id="user" className="w-64" value={mail.user} onChange={(e) => setMail({ ...mail, user: e.target.value })} />
         </SettingsRow>
-        <SettingsRow title="App password" description="Stored in your system keychain." htmlFor="password">
+        <SettingsRow
+          title="App password"
+          description={settings?.secureStorage ? 'Stored in your system keychain.' : 'No system keychain found — stored locally, unencrypted.'}
+          htmlFor="password"
+        >
           <Input
             id="password"
             type="password"
@@ -275,14 +296,18 @@ export function EmailStylePage({ style, onChange }: { style: EmailStyle; onChang
   )
 }
 
-// ---------------------------------------------------------------- Claude
+// ---------------------------------------------------------------- Agent
 
 export function ClaudePage({ settings, onSaved }: { settings: PublicSettings | null; onSaved: (s: PublicSettings) => void }) {
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<Status>(null)
+  const [path, setPath] = useState(settings?.opencode.path ?? '')
+  const [model, setModel] = useState(settings?.opencode.model ?? '')
+  const [agent, setAgent] = useState(settings?.opencode.agent ?? '')
   const desktop = !!window.api
+  const provider = settings?.aiProvider ?? 'claude'
 
   const test = async () => {
     if (!window.api) return
@@ -290,11 +315,14 @@ export function ClaudePage({ settings, onSaved }: { settings: PublicSettings | n
     setStatus(null)
     try {
       const res = await window.api.claude.test()
-      setStatus(
-        res.ok
-          ? { ok: true, message: res.value.via === 'api-key' ? 'Connected with your API key.' : 'Connected with your Claude sign-in.' }
-          : { ok: false, message: res.error },
-      )
+      const message = !res.ok
+        ? res.error
+        : res.value.via === 'api-key'
+          ? 'Connected with your API key.'
+          : res.value.via === 'claude-login'
+            ? 'Connected with your Claude sign-in.'
+            : 'Connected with opencode.'
+      setStatus({ ok: res.ok, message })
     } finally {
       setTesting(false)
     }
@@ -312,21 +340,48 @@ export function ClaudePage({ settings, onSaved }: { settings: PublicSettings | n
     }
   }
 
+  const setProvider = async (p: PublicSettings['aiProvider']) => {
+    if (!window.api) return
+    setStatus(null)
+    onSaved(await window.api.settings.set({ aiProvider: p }))
+  }
+
+  const saveOpencode = async () => {
+    if (!window.api) return
+    setBusy(true)
+    try {
+      onSaved(await window.api.settings.set({ opencodePath: path, opencodeModel: model, opencodeAgent: agent }))
+      setStatus(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
       <Intro>
-        Claude researches each organisation, drafts emails and powers the chat. It uses the Claude Code sign-in on this computer, so it runs on your Claude
-        plan.
+        Inroad uses an AI agent to research each organisation, draft emails and power the chat. Choose which one to run — both use the same features and keep
+        everything on your computer.
       </Intro>
-      <SettingsSection title="Connection">
+      <SettingsSection title="Agent">
         <SettingsRow
-          title="Claude sign-in"
+          title="Provider"
           description={
-            <>
-              Not signed in? Run <code className="rounded bg-muted px-1 py-0.5 text-xs">claude</code> in a terminal once and log in.
-            </>
+            provider === 'opencode'
+              ? 'Runs the opencode CLI installed on this computer, with your own model providers, through a read-only web agent.'
+              : 'Uses your Claude Code sign-in, or an Anthropic API key if you set one.'
           }
         >
+          <Choice
+            value={provider}
+            onChange={setProvider}
+            options={[
+              ['claude', 'Claude'],
+              ['opencode', 'opencode'],
+            ]}
+          />
+        </SettingsRow>
+        <SettingsRow title="Connection" description="Checks the chosen provider is reachable on this computer.">
           <Button variant="outline" disabled={!desktop || testing} onClick={test}>
             {testing && <Loader2 className="animate-spin" />} Test connection
           </Button>
@@ -337,41 +392,86 @@ export function ClaudePage({ settings, onSaved }: { settings: PublicSettings | n
           </SettingsBlock>
         )}
       </SettingsSection>
-      <SettingsSection title="API key (optional)">
-        <SettingsRow
-          title="Anthropic API key"
-          description={
-            <>
-              Used instead of your sign-in, billed per token. Create one at{' '}
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="underline">
-                console.anthropic.com
-              </a>
-              .
-            </>
-          }
-          htmlFor="apiKey"
-        >
-          <Input
-            id="apiKey"
-            type="password"
-            autoComplete="off"
-            className="w-56"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={settings?.hasAnthropicKey ? 'Saved — type to replace' : 'sk-ant-…'}
-          />
-          <Button disabled={!desktop || busy || !apiKey.trim()} onClick={() => setKey(apiKey)}>
-            Save
-          </Button>
-        </SettingsRow>
-        {settings?.hasAnthropicKey && (
-          <SettingsRow title="Using your API key" description="Remove it to go back to your Claude sign-in.">
-            <Button variant="ghost" className="text-destructive" disabled={!desktop || busy} onClick={() => setKey('')}>
-              Remove key
-            </Button>
+
+      {provider === 'claude' ? (
+        <>
+          {settings && !settings.secureStorage && <InsecureStorageNotice />}
+          <SettingsSection title="Claude connection">
+            <SettingsRow
+              title="Claude sign-in"
+              description={
+                <>
+                  Not signed in? Run <code className="rounded bg-muted px-1 py-0.5 text-xs">claude</code> in a terminal once and log in.
+                </>
+              }
+            />
+          </SettingsSection>
+          <SettingsSection title="API key (optional)">
+            <SettingsRow
+              title="Anthropic API key"
+              description={
+                <>
+                  Used instead of your sign-in, billed per token. Create one at{' '}
+                  <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="underline">
+                    console.anthropic.com
+                  </a>
+                  .
+                </>
+              }
+              htmlFor="apiKey"
+            >
+              <Input
+                id="apiKey"
+                type="password"
+                autoComplete="off"
+                className="w-56"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={settings?.hasAnthropicKey ? 'Saved — type to replace' : 'sk-ant-…'}
+              />
+              <Button disabled={!desktop || busy || !apiKey.trim()} onClick={() => setKey(apiKey)}>
+                Save
+              </Button>
+            </SettingsRow>
+            {settings?.hasAnthropicKey && (
+              <SettingsRow title="Using your API key" description="Remove it to go back to your Claude sign-in.">
+                <Button variant="ghost" className="text-destructive" disabled={!desktop || busy} onClick={() => setKey('')}>
+                  Remove key
+                </Button>
+              </SettingsRow>
+            )}
+          </SettingsSection>
+        </>
+      ) : (
+        <SettingsSection title="opencode">
+          <SettingsRow
+            title="opencode path"
+            description="Where the opencode executable is. Leave blank to use opencode from your PATH."
+            htmlFor="opencodePath"
+          >
+            <Input id="opencodePath" className="w-56" value={path} onChange={(e) => setPath(e.target.value)} placeholder="opencode" />
           </SettingsRow>
-        )}
-      </SettingsSection>
+          <SettingsRow
+            title="Model"
+            description="In provider/model form, e.g. anthropic/claude-sonnet-4-5. Blank uses your opencode default."
+            htmlFor="opencodeModel"
+          >
+            <Input id="opencodeModel" className="w-56" value={model} onChange={(e) => setModel(e.target.value)} placeholder="(default)" />
+          </SettingsRow>
+          <SettingsRow
+            title="Agent"
+            description="The opencode agent to run. The default “inroad” agent is read-only and web-only, which suits Inroad's research and drafting."
+            htmlFor="opencodeAgent"
+          >
+            <Input id="opencodeAgent" className="w-56" value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="inroad" />
+          </SettingsRow>
+          <SettingsBlock>
+            <Button disabled={!desktop || busy} onClick={saveOpencode}>
+              Save
+            </Button>
+          </SettingsBlock>
+        </SettingsSection>
+      )}
     </>
   )
 }
@@ -398,10 +498,11 @@ export function AppearancePage({ theme, onTheme }: { theme: 'dark' | 'light'; on
 // ---------------------------------------------------------------- Shortcuts
 
 export function ShortcutsPage() {
+  const agent = useAgentName()
   return (
     <>
       <Intro>Most of the time you’re typing, so everything important also has a ⌘ shortcut. Press ? anywhere to see these.</Intro>
-      <ShortcutSection title="Anywhere, even while typing" items={GLOBAL_SHORTCUTS} />
+      <ShortcutSection title="Anywhere, even while typing" items={globalShortcuts(agent)} />
       <ShortcutSection title="When you’re not in a text box" items={NAV_SHORTCUTS} />
     </>
   )
@@ -426,7 +527,7 @@ export function DataPage({ onReset }: { onReset: () => void }) {
     <SettingsSection title="Your data">
       <SettingsRow
         title="Start fresh"
-        description="Permanently removes all folders, campaigns, organisations, emails, chats and voices, including Deleted items, then runs setup again. Your mailbox and Claude settings stay, and nothing in your mailbox is touched."
+        description="Permanently removes all folders, campaigns, organisations, emails, chats and voices, including Deleted items, then runs setup again. Your mailbox and AI agent settings stay, and nothing in your mailbox is touched."
       >
         <AlertDialog>
           <AlertDialogTrigger asChild>

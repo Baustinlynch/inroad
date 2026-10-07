@@ -29,6 +29,7 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { toast } from 'sonner'
+import { AgentProvider, agentName } from './agent'
 import { CommandPalette, ShortcutsDialog, type PaletteCommand } from './components/CommandPalette'
 import { AddCompaniesDialog } from './components/AddCompaniesDialog'
 import { Editor } from './components/Editor'
@@ -127,6 +128,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   // Mailbox & API key settings (secrets stay in the main process).
   const [settings, setSettings] = useState<PublicSettings | null>(null)
+  // Name of the chosen AI backend, used in copy throughout the app.
+  const agent = agentName(settings?.aiProvider)
   const openSettings = (page: SettingsPage = settingsPage) => {
     setSettingsPage(page)
     setView('settings')
@@ -255,7 +258,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       body: md,
       originalBody: md,
       to: draft.to ? [draft.to] : [],
-      versions: [...q.versions, { id: crypto.randomUUID(), label: 'Claude’s draft', by: 'claude', at: Date.now(), markdown: md }],
+      versions: [...q.versions, { id: crypto.randomUUID(), label: `${agent}’s draft`, by: 'claude', at: Date.now(), markdown: md }],
       comments: [...(q.comments ?? []), ...stamp(draft.comments, 'draft')],
     }))
   }
@@ -826,7 +829,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     const pid = selected.id
     const prop = findProposal(selected, msgId, propId)
     if (!prop) return
-    if (accept && !hasText(selected, prop.old)) return notify({ text: "Couldn't apply: that text has changed since Claude suggested it" })
+    if (accept && !hasText(selected, prop.old)) return notify({ text: `Couldn't apply: that text has changed since ${agent} suggested it` })
     const apply = () => {
       if (accept) swapText(pid, prop.old, prop.new)
       setProposalState(pid, msgId, propId, accept ? 'accepted' : 'rejected')
@@ -1177,9 +1180,9 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     ...(undoTop ? [{ id: 'undo', group: 'Actions' as const, label: `Undo: ${undoTop.label}`, icon: <Undo2 />, shortcut: '⌘Z', run: appUndo }] : []),
     ...(redoTop ? [{ id: 'redo', group: 'Actions' as const, label: `Redo: ${redoTop.label}`, icon: <Redo2 />, shortcut: '⌘⇧Z', run: appRedo }] : []),
     { id: 'save', group: 'Actions', label: 'Save to drafts', icon: <Inbox />, shortcut: '⌘↵', run: save },
-    { id: 'diff', group: 'Actions', label: 'Compare with Claude’s draft', icon: <GitCompare />, shortcut: '⌘D', run: () => setShowDiff((v) => !v) },
+    { id: 'diff', group: 'Actions', label: `Compare with ${agent}’s draft`, icon: <GitCompare />, shortcut: '⌘D', run: () => setShowDiff((v) => !v) },
     { id: 'regen', group: 'Actions', label: 'Regenerate draft', icon: <RefreshCw />, shortcut: '⌘R', run: regenerate },
-    { id: 'chat', group: 'Actions', label: 'Chat with Claude', icon: <MessageSquare />, shortcut: '⌘/', run: openChat },
+    { id: 'chat', group: 'Actions', label: `Chat with ${agent}`, icon: <MessageSquare />, shortcut: '⌘/', run: openChat },
     { id: 'brief', group: 'Actions', label: 'Show brief', icon: <FileText />, shortcut: '⌘⇧B', run: () => togglePanel('brief') },
     { id: 'left', group: 'Actions', label: 'Toggle sidebar', icon: <PanelLeft />, shortcut: '⌘\\', run: () => setLeftOpen((v) => !v) },
     {
@@ -1456,8 +1459,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       <h2 className="font-heading text-2xl font-semibold">Nothing in {campaign.name || 'this campaign'} yet</h2>
       <p className="max-w-md text-muted-foreground">
         {campaign.notes.trim()
-          ? 'Add the organisations you want to reach. Claude researches each one and drafts an email.'
-          : 'Start with the campaign notes: what you’re asking for, the details Claude should mention, and what to look for when researching. Then add the organisations you want to reach.'}
+          ? `Add the organisations you want to reach. ${agent} researches each one and drafts an email.`
+          : `Start with the campaign notes: what you’re asking for, the details ${agent} should mention, and what to look for when researching. Then add the organisations you want to reach.`}
       </p>
       <div className="flex gap-2">
         {!campaign.notes.trim() && (
@@ -1475,13 +1478,16 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
   if (!onboarded)
     return (
       <TooltipProvider delayDuration={300}>
-        <Onboarding onFinish={finishOnboarding} onSkip={() => setOnboarded(true)} settings={settings} onSettings={setSettings} />
+        <AgentProvider provider={settings?.aiProvider}>
+          <Onboarding onFinish={finishOnboarding} onSkip={() => setOnboarded(true)} settings={settings} onSettings={setSettings} />
+        </AgentProvider>
         <Toaster theme={theme} position="bottom-center" />
       </TooltipProvider>
     )
 
   return (
     <TooltipProvider delayDuration={300}>
+      <AgentProvider provider={settings?.aiProvider}>
       <SidebarProvider open={leftOpen} onOpenChange={setLeftOpen} className="h-svh min-h-0 overflow-hidden">
         {view === 'settings' ? (
           <>
@@ -1602,7 +1608,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
             <SheetContent side="right" showCloseButton={false} className="w-full gap-0 p-0 sm:max-w-md">
               <SheetHeader className="sr-only">
                 <SheetTitle>Brief & chat</SheetTitle>
-                <SheetDescription>Research brief and chat with Claude for this email</SheetDescription>
+                <SheetDescription>Research brief and chat with {agent} for this email</SheetDescription>
               </SheetHeader>
               {panel}
             </SheetContent>
@@ -1614,6 +1620,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       <CommandPalette open={palette} onOpenChange={setPalette} commands={commands} />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
       <Toaster theme={theme} position="bottom-center" />
+      </AgentProvider>
     </TooltipProvider>
   )
 }

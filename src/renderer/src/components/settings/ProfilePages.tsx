@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Mail, Paperclip, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import { MAX_VOICE_EXAMPLES, type Campaign, type Folder, type Voice } from '../../data'
+import { useAgentName } from '../../agent'
 import { FolderFields } from '../FolderFields'
 import { ButtonKeys } from '../hint'
 import { Intro } from './GeneralPages'
@@ -45,6 +46,7 @@ export function CampaignPage({
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
 }) {
+  const agent = useAgentName()
   return (
     <>
       <SettingsSection>
@@ -94,7 +96,7 @@ export function CampaignPage({
         <SettingsRow
           stacked
           title="What you’re asking for"
-          description="Who you’re contacting and what you’re asking them for, what Claude should look for when researching each one, and anything about tone. Claude reads this after the folder’s shared context."
+          description={`Who you’re contacting and what you’re asking them for, what ${agent} should look for when researching each one, and anything about tone. ${agent} reads this after the folder’s shared context.`}
         >
           <Textarea
             value={campaign.notes}
@@ -120,7 +122,7 @@ export function CampaignPage({
       </SettingsSection>
 
       <SettingsSection title="Attachments">
-        <SettingsRow title="Attached to every email" description="Added when each email is saved to Drafts. Claude knows what’s attached.">
+        <SettingsRow title="Attached to every email" description={`Added when each email is saved to Drafts. ${agent} knows what’s attached.`}>
           <Button variant="outline" size="sm" onClick={onAttach} disabled={!window.api}>
             <Paperclip /> Attach file
           </Button>
@@ -159,6 +161,7 @@ export function VoicePage({
   onAddExample: (email: string) => void
   onDeleteExample: (id: string) => void
 }) {
+  const agent = useAgentName()
   const [note, setNote] = useState('')
   const [pasting, setPasting] = useState(false)
   const [email, setEmail] = useState('')
@@ -230,7 +233,7 @@ export function VoicePage({
 
       <SettingsSection
         title="Example emails"
-        description={`Claude sees every email you paste here, plus your ${MAX_VOICE_EXAMPLES} most recent edited emails${learned.length ? ` (${learned.length} so far)` : ''}.`}
+        description={`${agent} sees every email you paste here, plus your ${MAX_VOICE_EXAMPLES} most recent edited emails${learned.length ? ` (${learned.length} so far)` : ''}.`}
       >
         {pasted.map((e) => (
           <div key={e.id} className="group flex items-start gap-2 px-4 py-2.5 text-sm">
