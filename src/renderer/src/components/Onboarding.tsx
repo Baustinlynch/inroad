@@ -67,7 +67,7 @@ export function Onboarding({
     {
       title: 'What’s your event?',
       description:
-        `It becomes a folder for your campaigns, and ${agent} uses it in every email. Type the name and ${agent} can pull the details from your Slack, email and the web.`,
+        `It becomes a folder for your campaigns, and ${agent} uses it in every email. Type the name and ${agent} can pull the details from ${agent === 'opencode' ? 'the web' : 'your Slack, email and the web'}.`,
       body: <FolderFields folder={folder} onChange={setFolder} autoFocus />,
       canContinue: !!folder.name.trim(),
     },
