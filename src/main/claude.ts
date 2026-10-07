@@ -8,6 +8,7 @@ import type {
   DraftRequest,
   DraftResult,
   EventLookupRequest,
+  EmailComment,
   EmailGuidance,
   EventLookupResult,
   ParsedOrganisation,
@@ -46,6 +47,9 @@ function baseOptions(apiKey: string | undefined, opts: Partial<Options>): Option
     cwd,
     ...(config.executable ? { pathToClaudeCodeExecutable: config.executable } : {}),
     settingSources: [],
+    // The user's claude.ai connectors (Slack, email…) only load for the event
+    // lookup, which asks for them; elsewhere they'd just add noise and startup time.
+    settings: { disableClaudeAiConnectors: true },
     persistSession: false,
     // Anything not explicitly allowed is denied, never prompted for.
     permissionMode: 'dontAsk',
@@ -152,11 +156,29 @@ const BriefSchema = z.object({
 // The markdown dialect email bodies are stored in (see the renderer's markdown.ts).
 const MARKDOWN = `Blank line between paragraphs; a single newline is a line break (e.g. between sign-off lines). **bold** and *italic* sparingly, [link text](https://url) for links, "- " or "1. " for lists, "> " for quotes. No headings, tables, images or HTML.`
 
+const COMMENT_KINDS = `"verify" flags something the user should double-check before sending: a number, name, date or claim you couldn't confirm, or a guessed contact. "note" explains a choice, e.g. why you opened with a particular hook or why a detail is in there.`
+
+const CommentSchema = z.object({
+  quote: z
+    .string()
+    .describe(
+      'Exact text from the email body, copied verbatim (including markdown), within a single paragraph. Keep it short: the phrase the comment is about.',
+    ),
+  comment: z.string().describe('One short sentence for the user.'),
+  kind: z.enum(['verify', 'note']),
+})
+
 const EmailFields = {
   to: z.string().describe('Email of the single best recipient, or empty string if none has an address.'),
   subject: z.string(),
   body: z.string().describe(`The email body in markdown. ${MARKDOWN}`),
+  comments: z
+    .array(CommentSchema)
+    .describe(`1–4 comments on specific phrases of the body, for the user reviewing it. ${COMMENT_KINDS} Flag anything uncertain; skip the obvious.`),
 }
+
+// Only keep comments whose quote really is in the body.
+const anchored = (body: string, comments: EmailComment[]) => comments.filter((c) => c.quote.trim() && body.includes(c.quote))
 
 const ResearchDraftSchema = z.object({
   research_notes: z
@@ -207,7 +229,10 @@ export async function researchAndDraft(apiKey: string | undefined, req: Research
     )
     emit({ jobId: req.jobId, kind: 'step', text: 'Writing draft' })
     const out = parseOutput(ResearchDraftSchema, result.structured_output)
-    return { research: out.research_notes, draft: { brief: out.brief, to: out.to, subject: out.subject, body: out.body } }
+    return {
+      research: out.research_notes,
+      draft: { brief: out.brief, to: out.to, subject: out.subject, body: out.body, comments: anchored(out.body, out.comments) },
+    }
   })
 }
 
@@ -238,7 +263,8 @@ export async function draft(apiKey: string | undefined, req: DraftRequest): Prom
         ...structured(DraftSchema),
       }),
     )
-    return parseOutput(DraftSchema, result.structured_output)
+    const out = parseOutput(DraftSchema, result.structured_output)
+    return { ...out, comments: anchored(out.body, out.comments) }
   })
 }
 
@@ -248,7 +274,7 @@ const CHAT_SYSTEM = `You help the user refine one outreach email. You can see th
 
 The email body is markdown, exactly as stored: ${MARKDOWN} Links and formatting are part of the text you see and can change.
 
-To change the email, call the propose_edit tool: quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Each call becomes a suggestion the user can accept or reject, so prefer a few focused edits over rewriting everything, and stay in the user's voice. Use WebSearch only if the user asks for something the brief doesn't cover. Keep your messages short.`
+To change the email, call the propose_edit tool: quote the exact text to replace (copied verbatim from the subject or body, long enough to be unique, within a single paragraph) and give the replacement. To delete something, quote it with a few surrounding words and leave those words in the replacement. Each call becomes a suggestion the user can accept or reject, so prefer a few focused edits over rewriting everything, and stay in the user's voice. When the user asks what you think, wants something checked, or asks why something is there, call add_comment to pin your answer to the phrase it's about rather than only describing it in your reply. Don't repeat comments the email already has. Use WebSearch only if the user asks for something the brief doesn't cover. Keep your messages short.`
 
 export async function chat(apiKey: string | undefined, req: ChatRequest, emit: Emit): Promise<Result<ChatResult>> {
   return guard(async () => {
@@ -274,12 +300,33 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
       },
       { annotations: { readOnlyHint: true }, alwaysLoad: true },
     )
-    const editor = createSdkMcpServer({ name: 'email', version: '1.0.0', tools: [proposeEdit] })
+    const comments: EmailComment[] = []
+    // Like propose_edit, but only remarks on a passage without changing it.
+    const addComment = tool(
+      'add_comment',
+      `Pin a short comment to a phrase in the email body, shown next to it for the user. ${COMMENT_KINDS}`,
+      {
+        quote: CommentSchema.shape.quote,
+        comment: CommentSchema.shape.comment,
+        kind: CommentSchema.shape.kind,
+      },
+      async (c) => {
+        if (!req.body.includes(c.quote))
+          return { content: [{ type: 'text', text: 'That text isn’t in the email body. Quote it exactly as it appears.' }], isError: true }
+        comments.push(c)
+        return { content: [{ type: 'text', text: 'Pinned to the email for the user.' }] }
+      },
+      { annotations: { readOnlyHint: true }, alwaysLoad: true },
+    )
+    const editor = createSdkMcpServer({ name: 'email', version: '1.0.0', tools: [proposeEdit, addComment] })
 
     const context = [
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
       voiceSection(req.voice),
       ...guidanceSections(req),
+      req.comments?.length
+        ? `<comments_on_email>\n${req.comments.map((c) => `- [${c.kind}] "${c.quote}": ${c.comment}`).join('\n')}\n</comments_on_email>`
+        : '',
       req.brief ? `<brief organisation="${req.company}">\n${JSON.stringify(req.brief)}\n</brief>` : '',
       `<email>\nSubject: ${req.subject}\n\n${req.body}\n</email>`,
     ]
@@ -298,7 +345,7 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
         systemPrompt: CHAT_SYSTEM,
         tools: ['WebSearch'],
         mcpServers: { email: editor },
-        allowedTools: ['WebSearch', 'mcp__email__propose_edit'],
+        allowedTools: ['WebSearch', 'mcp__email__propose_edit', 'mcp__email__add_comment'],
         effort: 'medium',
         maxTurns: 12,
         includePartialMessages: true,
@@ -319,7 +366,7 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
         emit({ jobId: req.jobId, kind: 'delta', text: chunk })
       },
     )
-    return { text: text.trim() || result.result.trim(), proposals }
+    return { text: text.trim() || result.result.trim(), proposals, comments }
   })
 }
 
@@ -391,6 +438,7 @@ Only report what you found. If sources disagree, prefer the most recent and say 
         allowedTools: ['WebSearch', 'WebFetch', 'ToolSearch'],
         // Connector tools come to canUseTool instead of being auto-denied.
         permissionMode: 'default',
+        settings: { disableClaudeAiConnectors: false },
         canUseTool: async (toolName, input) =>
           toolName.startsWith('mcp__') && isReadOnlyTool(toolName.split('__').at(-1) ?? '')
             ? { behavior: 'allow', updatedInput: input }

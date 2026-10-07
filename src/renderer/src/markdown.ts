@@ -59,6 +59,21 @@ const manager = new MarkdownManager({ extensions, markedOptions })
 
 export const parseMarkdown = (md: string) => manager.parse(md)
 
+// The text a reader sees, without markdown syntax: paragraphs separated by a
+// blank line, line breaks as "\n". Used to find a comment's quote in the email
+// even if Claude quoted it with slightly different markdown.
+export function plainText(md: string): string {
+  type Node = { type?: string; text?: string; content?: Node[] }
+  const blocks: string[] = []
+  const inline = (n: Node): string => (n.type === 'text' ? (n.text ?? '') : n.type === 'hardBreak' ? '\n' : (n.content ?? []).map(inline).join(''))
+  const walk = (n: Node) => {
+    if (n.type === 'paragraph') blocks.push(inline(n))
+    else (n.content ?? []).forEach(walk)
+  }
+  walk(manager.parse(md) as Node)
+  return blocks.join('\n\n')
+}
+
 // The form the editor would write. Claude's markdown goes through this before
 // it's stored, so "edited" means the user changed something, not that the
 // editor reformatted "* item" as "- item".

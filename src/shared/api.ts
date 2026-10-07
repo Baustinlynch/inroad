@@ -62,6 +62,15 @@ export interface DraftRequest extends EmailGuidance {
   previousDraft?: string
 }
 
+// Claude's remark on one passage of an email.
+export interface EmailComment {
+  // Exact text from the body (markdown, within one paragraph).
+  quote: string
+  comment: string
+  // verify: a fact to double-check. note: why something is there.
+  kind: 'verify' | 'note'
+}
+
 export interface DraftResult {
   brief: Brief
   // The recipient Claude thinks is best, or '' if none has an address.
@@ -69,10 +78,13 @@ export interface DraftResult {
   subject: string
   // Markdown (the same dialect the app stores; see markdown.ts).
   body: string
+  comments: EmailComment[]
 }
 
 export interface ChatRequest extends EmailGuidance {
   jobId: string
+  // Comments already on the email, so Claude doesn't repeat them.
+  comments?: EmailComment[]
   company: string
   campaignNotes: string
   brief?: Brief
@@ -93,6 +105,7 @@ export interface ProposedEdit {
 export interface ChatResult {
   text: string
   proposals: ProposedEdit[]
+  comments: EmailComment[]
 }
 
 // Onboarding: find what's known about the user's event, via the web and any

@@ -198,3 +198,9 @@
   padding: 0 0.25rem;
   font-size: 0.85em;
 }
+
+/* Phrases Claude commented on (commentHighlights.ts). */
+.email-body .comment-mark { border-radius: 2px; cursor: pointer; transition: background-color 120ms; }
+.email-body .comment-verify { background: color-mix(in oklch, var(--mark) 22%, transparent); box-shadow: inset 0 -2px 0 var(--mark); }
+.email-body .comment-note { background: color-mix(in oklch, var(--muted-foreground) 12%, transparent); box-shadow: inset 0 -1.5px 0 color-mix(in oklch, var(--muted-foreground) 55%, transparent); }
+.email-body .comment-active { background: color-mix(in oklch, var(--mark) 42%, transparent); }

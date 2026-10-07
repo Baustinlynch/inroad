@@ -1,6 +1,6 @@
 // Smoke test for src/main/claude.ts against the real Agent SDK. With no
 // ANTHROPIC_API_KEY it uses this machine's Claude Code sign-in.
-//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|parse|guided|event <name>]
+//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|parse|guided|comment|event <name>]
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -117,5 +117,16 @@ if (which === 'guided') {
   const body = r.value.body
   console.log(body, '\n')
   const words = body.split(/\s+/).filter(Boolean).length
+  console.log('comments:', r.value.comments)
+  for (const c of r.value.comments) assert.ok(body.includes(c.quote), 'comment quotes text in the body')
   console.log({ words, mentionsCampfire: /campfire/i.test(body), asksFor40: /40/.test(body), hasLink: body.includes('haven.hackclub.com/canberra'), endsWithQuestion: /\?\s*(\n.*){0,4}$/.test(body.trim()) })
+}
+
+if (which === 'comment') {
+  const body = "Hi Priya,\n\nI'm Jordan from Hack the Harbour, a 48-hour student hackathon in Sydney with around 400 hackers.\n\nLumen's vision API launched in March and would be a great fit.\n\nKeen to chat?\n\nCheers,\nJordan"
+  const r = await chat(key, { jobId: 'c2', company: 'Lumen Labs', campaignNotes: 'Asking for sponsorship.', voice, subject: 'Hack the Harbour', body, history: [], message: 'anything in here I should double check before sending?' }, log)
+  if (!r.ok) throw new Error(r.error)
+  console.log('\n✓ chat:', r.value.text)
+  console.log('  comments:', r.value.comments)
+  assert.ok(r.value.comments.length > 0, 'expected add_comment calls')
 }

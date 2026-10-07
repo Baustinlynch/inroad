@@ -17,6 +17,7 @@ import {
   Loader2,
   MessageSquare,
   MessageSquarePlus,
+  MessageSquareText,
   Sparkles,
   Trash2,
   Undo2,
@@ -313,6 +314,23 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
                     >
                       {m.text}
                     </Markdown>
+                  </div>
+                )}
+                {m.comments && m.comments.length > 0 && (
+                  <div className="grid gap-1 rounded-lg border px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Pinned to the email</div>
+                    {m.comments.map((c, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs/relaxed">
+                        {c.kind === 'verify' ? (
+                          <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-mark" aria-label="Check this" />
+                        ) : (
+                          <MessageSquareText className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-label="Note" />
+                        )}
+                        <span>
+                          <span className="text-muted-foreground">“{c.quote}”</span> {c.comment}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {m.proposals?.map((pr, i) => {

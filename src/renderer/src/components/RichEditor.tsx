@@ -8,12 +8,17 @@ import { Bold, Check, Copy, ExternalLink, Italic, Link2, List, ListOrdered, Penc
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { emailExtensions, parseMarkdown } from '../markdown'
 import { currentEditor, historyDepth, undoBridge } from '../undo'
+import { CommentHighlights, commentsKey, type Highlight } from './commentHighlights'
 import { Hint, Keys } from './hint'
 
 interface Props {
   // Markdown (see markdown.ts).
   value: string
   onChange: (markdown: string) => void
+  // Phrases Claude commented on, highlighted in the text.
+  highlights?: Highlight[]
+  activeHighlight?: string | null
+  onHighlightClick?: (id: string) => void
 }
 
 // What the link popover is editing: the range it applies to, plus the text and
@@ -28,16 +33,18 @@ interface LinkDraft {
 
 // Deliberately small formatting set: no headings, sizes, fonts or colours, so
 // emails stay looking like emails.
-export function RichEditor({ value, onChange }: Props) {
+export function RichEditor({ value, onChange, highlights = [], activeHighlight = null, onHighlightClick }: Props) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const onHighlightClickRef = useRef(onHighlightClick)
+  onHighlightClickRef.current = onHighlightClick
   const [linkDraft, setLinkDraft] = useState<LinkDraft | null>(null)
   const linkDraftRef = useRef(linkDraft)
   linkDraftRef.current = linkDraft
   const startLinkRef = useRef<() => void>(() => {})
 
   const editor = useEditor({
-    extensions: emailExtensions({ autolink: true, linkOnPaste: true, defaultProtocol: 'https' }),
+    extensions: [...emailExtensions({ autolink: true, linkOnPaste: true, defaultProtocol: 'https' }), CommentHighlights],
     content: value,
     contentType: 'markdown',
     editorProps: {
@@ -61,16 +68,32 @@ export function RichEditor({ value, onChange }: Props) {
         }
         return false
       },
-      // ⌘-click opens a link, like most editors.
+      // ⌘-click opens a link, like most editors. A plain click on a
+      // highlighted phrase also shows its comment.
       handleClick: (view, pos, e) => {
+        const commented = (e.target as HTMLElement).closest?.('[data-comment]')?.getAttribute('data-comment')
+        if (commented) onHighlightClickRef.current?.(commented)
         if (!(e.metaKey || e.ctrlKey)) return false
-        const href = view.state.doc.resolve(pos).marks().find((m) => m.type.name === 'link')?.attrs.href
+        const href = view.state.doc
+          .resolve(pos)
+          .marks()
+          .find((m) => m.type.name === 'link')?.attrs.href
         if (href) window.open(href, '_blank', 'noopener')
         return !!href
       },
     },
     onUpdate: ({ editor }) => onChangeRef.current(editor.getMarkdown()),
   })
+
+  // Hand the highlights to the plugin (not part of the document or its history).
+  const highlightKey = JSON.stringify([highlights, activeHighlight])
+  useEffect(() => {
+    if (!editor) return
+    editor.view.dispatch(
+      editor.state.tr.setMeta(commentsKey, { highlights, active: activeHighlight }).setMeta('addToHistory', false).setMeta('preventUpdate', true),
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, highlightKey])
 
   // Pick up changes made outside the editor: accepted suggestions, restored versions.
   useEffect(() => {
