@@ -219,6 +219,8 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
     return {
       company: p.company,
       campaignNotes: about + (c?.notes ?? '') + files,
+      emailFormat: c?.format,
+      orgNote: p.note,
       voice: voiceInput(voiceOf(p.campaignId)),
       senderName: settingsRef.current?.mail?.fromName ?? '',
     }
@@ -1273,12 +1275,13 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
 
   const queuePosition = prospects.filter((p) => p.status === 'queued' && !p.deletedAt).findIndex((p) => p.id === selectedId)
 
-  const addProspects = (orgs: { company: string; website: string }[]) => {
-    const added = orgs.map<Prospect>(({ company, website }) => ({
+  const addProspects = (orgs: { name: string; website: string; note: string }[]) => {
+    const added = orgs.map<Prospect>(({ name, website, note }) => ({
       id: crypto.randomUUID(),
       campaignId,
-      company,
+      company: name,
       domain: website,
+      note: note || undefined,
       status: 'queued',
       progress: [],
       subject: '',
@@ -1389,6 +1392,7 @@ export default function App({ saved: loaded }: { saved: SavedState }) {
       onTab={setTab}
       onClose={() => setRightOpen(false)}
       onAddRecipient={addRecipient}
+      onNote={(note) => update(selected.id, (p) => ({ ...p, note }))}
       onProposal={resolveProposal}
       onRevertProposal={revertProposal}
       onSend={sendChat}

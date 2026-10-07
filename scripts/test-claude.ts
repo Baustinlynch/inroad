@@ -1,11 +1,11 @@
 // Smoke test for src/main/claude.ts against the real Agent SDK. With no
 // ANTHROPIC_API_KEY it uses this machine's Claude Code sign-in.
-//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|event <name>]
+//   npx tsx scripts/test-claude.ts [test|research|chat|voice|rules|tools|parse|guided|event <name>]
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chat, configureClaude, isReadOnlyTool, learnVoice, lookupEvent, researchAndDraft, testClaude, writingRules } from '../src/main/claude'
+import { chat, configureClaude, draft, isReadOnlyTool, learnVoice, lookupEvent, parseOrganisations, researchAndDraft, testClaude, writingRules } from '../src/main/claude'
 
 configureClaude({ workspace: mkdtempSync(join(tmpdir(), 'inroad-')), clientApp: 'inroad/test' })
 const key = process.env.INROAD_TEST_KEY // deliberately not ANTHROPIC_API_KEY
@@ -90,4 +90,32 @@ if (which === 'event') {
   console.log(`\n✓ event lookup in ${Math.round((Date.now() - t) / 1000)}s`)
   console.log(r.value.details)
   console.log('  sources:', r.value.sources)
+}
+
+if (which === 'parse') {
+  const t = Date.now()
+  const r = await parseOrganisations(
+    key,
+    'Canva and Atlassian, both formal. PCBWay — they sponsored Campfire so mention that and ask for ~40 badges. Also JLCPCB (jlcpcb.com) and maybe Seeed Studio, write to their education team',
+  )
+  if (!r.ok) throw new Error(r.error)
+  console.log(`✓ parsed in ${Math.round((Date.now() - t) / 1000)}s`, r.value)
+  assert.equal(r.value.length, 5)
+}
+
+if (which === 'guided') {
+  const r = await draft(key, {
+    company: 'PCBWay',
+    campaignNotes: 'Haven Canberra, a free game jam for teens (13–18) in Canberra, 14–15 November, ~30 attendees. Asking for sponsorship.',
+    research: 'PCBWay is a PCB manufacturer in Shenzhen with a sponsorship programme for maker and student events (pcbway.com/sponsor.html).',
+    voice,
+    senderName: 'Ingo',
+    emailFormat: 'Under 100 words. End with a question. Include a link to https://haven.hackclub.com/canberra.',
+    orgNote: 'Mention they sponsored Campfire Canberra; ask for about 40 PCB badges.',
+  })
+  if (!r.ok) throw new Error(r.error)
+  const body = r.value.body
+  console.log(body, '\n')
+  const words = body.split(/\s+/).filter(Boolean).length
+  console.log({ words, mentionsCampfire: /campfire/i.test(body), asksFor40: /40/.test(body), hasLink: body.includes('haven.hackclub.com/canberra'), endsWithQuestion: /\?\s*(\n.*){0,4}$/.test(body.trim()) })
 }

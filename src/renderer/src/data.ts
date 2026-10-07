@@ -48,6 +48,9 @@ export interface Prospect {
   company: string
   // Website, if given or found. Helps research find the right organisation.
   domain: string
+  // What the user said about this organisation ("mention they sponsored
+  // Campfire"). Claude follows it for research, drafting and chat.
+  note?: string
   status: Status
   progress: string[]
   error?: string
@@ -88,6 +91,9 @@ export interface Campaign {
   // Freeform: who you're contacting, what you're asking for, what to research,
   // tone. Read after the folder's notes for every email in the campaign.
   notes: string
+  // Structure and must-haves for every email in the campaign. Claude treats
+  // this as a requirement, unlike the notes.
+  format?: string
   // Added to every email in this campaign when it's saved to Drafts.
   attachments: Attachment[]
   // Which voice profile drafts in this campaign are written in.

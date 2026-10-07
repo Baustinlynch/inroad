@@ -29,7 +29,15 @@ export interface VoiceInput {
   examples: { draft?: string; final: string }[]
 }
 
-export interface ResearchRequest {
+// Firm requirements for an email, on top of the campaign notes.
+export interface EmailGuidance {
+  // The campaign's "Email format": structure and must-haves for every email.
+  emailFormat?: string
+  // What the user said about this one organisation, e.g. "mention they sponsored Campfire".
+  orgNote?: string
+}
+
+export interface ResearchRequest extends EmailGuidance {
   jobId: string
   company: string
   website?: string
@@ -44,7 +52,7 @@ export interface ResearchResult {
   draft: DraftResult
 }
 
-export interface DraftRequest {
+export interface DraftRequest extends EmailGuidance {
   company: string
   campaignNotes: string
   research: string
@@ -63,7 +71,7 @@ export interface DraftResult {
   body: string
 }
 
-export interface ChatRequest {
+export interface ChatRequest extends EmailGuidance {
   jobId: string
   company: string
   campaignNotes: string
@@ -106,6 +114,15 @@ export interface EventLookupResult {
 // Onboarding: style notes drawn from emails the user wrote.
 export interface WritingRulesRequest {
   emails: string[]
+}
+
+// Adding organisations: free text split into organisations by Claude.
+export interface ParsedOrganisation {
+  name: string
+  // '' if none was given.
+  website: string
+  // Instructions for just this organisation, '' if none.
+  note: string
 }
 
 export interface VoiceLearnRequest {
@@ -193,6 +210,7 @@ export interface InroadApi {
     learnVoice: (req: VoiceLearnRequest) => Promise<Result<VoiceLearnResult>>
     lookupEvent: (req: EventLookupRequest) => Promise<Result<EventLookupResult>>
     writingRules: (req: WritingRulesRequest) => Promise<Result<{ notes: string[] }>>
+    parseOrganisations: (text: string) => Promise<Result<ParsedOrganisation[]>>
     // Subscribe to progress for running requests; returns an unsubscribe function.
     onProgress: (cb: (p: ClaudeProgress) => void) => () => void
   }

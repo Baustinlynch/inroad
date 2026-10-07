@@ -6,7 +6,23 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import Markdown from 'react-markdown'
-import { ArrowUp, Check, ChevronsUpDown, CircleAlert, ExternalLink, FileText, Link2, Loader2, MessageSquare, MessageSquarePlus, Sparkles, Trash2, Undo2, UserPlus, X } from 'lucide-react'
+import {
+  ArrowUp,
+  Check,
+  ChevronsUpDown,
+  CircleAlert,
+  ExternalLink,
+  FileText,
+  Link2,
+  Loader2,
+  MessageSquare,
+  MessageSquarePlus,
+  Sparkles,
+  Trash2,
+  Undo2,
+  UserPlus,
+  X,
+} from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   DropdownMenu,
@@ -29,6 +45,7 @@ interface Props {
   onTab: (t: Tab) => void
   onClose: () => void
   onAddRecipient: (email: string) => void
+  onNote: (note: string) => void
   onProposal: (msgId: string, proposalId: string, accept: boolean) => void
   onRevertProposal: (msgId: string, proposalId: string) => void
   onSend: (text: string) => void
@@ -68,11 +85,7 @@ export function RightPanel(props: Props) {
           </Button>
         </Hint>
       </div>
-      {tab === 'brief' ? (
-        <BriefView prospect={p} onAddRecipient={onAddRecipient} />
-      ) : (
-        <ChatView {...props} />
-      )}
+      {tab === 'brief' ? <BriefView prospect={p} onAddRecipient={onAddRecipient} onNote={props.onNote} /> : <ChatView {...props} />}
     </div>
   )
 }
@@ -86,7 +99,23 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function BriefView({ prospect: p, onAddRecipient }: { prospect: Prospect; onAddRecipient: (e: string) => void }) {
+// Your instructions for this organisation, editable any time. Claude follows
+// them on the next regenerate or chat message.
+function NoteField({ prospect: p, onNote }: { prospect: Prospect; onNote: (note: string) => void }) {
+  return (
+    <Section title="Your note">
+      <Textarea
+        value={p.note ?? ''}
+        onChange={(e) => onNote(e.target.value)}
+        placeholder={`Anything Claude should say or look for with ${p.company}`}
+        className="min-h-16 resize-none bg-background text-sm"
+      />
+      {p.note?.trim() && p.originalBody && <p className="mt-1.5 text-xs text-muted-foreground">Changed it? Regenerate (⌘R) or ask in chat to apply it.</p>}
+    </Section>
+  )
+}
+
+function BriefView({ prospect: p, onAddRecipient, onNote }: { prospect: Prospect; onAddRecipient: (e: string) => void; onNote: (note: string) => void }) {
   const b = p.brief
   // Sources come from the model, so don't trust them to be valid URLs.
   const hostname = (url: string) => {
@@ -96,11 +125,18 @@ function BriefView({ prospect: p, onAddRecipient }: { prospect: Prospect; onAddR
       return ''
     }
   }
-  if (!b) return <p className="p-4 text-sm text-muted-foreground">The brief appears here once {p.company} has been researched.</p>
+  if (!b)
+    return (
+      <div className="space-y-5 p-4 text-sm">
+        <NoteField prospect={p} onNote={onNote} />
+        <p className="text-muted-foreground">The brief appears here once {p.company} has been researched.</p>
+      </div>
+    )
 
   return (
     <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
       <div className="space-y-5 p-4 text-sm">
+        <NoteField prospect={p} onNote={onNote} />
         <Section title="Summary">
           <p className="leading-relaxed">{b.summary}</p>
         </Section>
@@ -266,7 +302,17 @@ function ChatView({ prospect: p, onProposal, onRevertProposal: onRevert, onSend,
                   </p>
                 ) : (
                   <div className="chat-md leading-relaxed">
-                    <Markdown components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{m.text}</Markdown>
+                    <Markdown
+                      components={{
+                        a: ({ href, children }) => (
+                          <a href={href} target="_blank" rel="noreferrer">
+                            {children}
+                          </a>
+                        ),
+                      }}
+                    >
+                      {m.text}
+                    </Markdown>
                   </div>
                 )}
                 {m.proposals?.map((pr, i) => {

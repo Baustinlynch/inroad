@@ -103,6 +103,20 @@ export function CampaignPage({
             className="min-h-56 leading-relaxed"
           />
         </SettingsRow>
+        <SettingsRow
+          stacked
+          title="Email format"
+          description="The structure and must-haves for every email in this campaign. Claude treats this as a requirement, where the notes above are context."
+        >
+          <Textarea
+            value={campaign.format ?? ''}
+            onChange={(e) => onUpdate({ format: e.target.value })}
+            placeholder={
+              'e.g. One-line intro, then why them, then the ask (Gold tier, $5k) with a link to the prospectus. Under 150 words. End with a question.'
+            }
+            className="min-h-28 leading-relaxed"
+          />
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Attachments">

@@ -8,7 +8,9 @@ import type {
   DraftRequest,
   DraftResult,
   EventLookupRequest,
+  EmailGuidance,
   EventLookupResult,
+  ParsedOrganisation,
   ProposedEdit,
   ResearchRequest,
   ResearchResult,
@@ -117,6 +119,17 @@ function voiceSection(voice: VoiceInput) {
   return `<voice name="${voice.name}">\n<style_notes>\n${notes}\n</style_notes>\n${examples ? `<examples>\n${examples}\n</examples>\n` : ''}</voice>`
 }
 
+// The campaign's email format and the user's note about this organisation:
+// firm requirements, unlike the softer campaign notes and voice.
+function guidanceSections(req: EmailGuidance & { company: string }) {
+  return [
+    req.emailFormat?.trim() ? `<email_format>\nEvery email in this campaign must follow this:\n${req.emailFormat.trim()}\n</email_format>` : '',
+    req.orgNote?.trim() ? `<user_instructions organisation="${req.company}">\n${req.orgNote.trim()}\n</user_instructions>` : '',
+  ].filter(Boolean)
+}
+
+const GUIDANCE_RULE = `If there's an email format, follow its structure and include everything it asks for. If the user gave instructions for this organisation, follow them exactly; they override the campaign notes, the format and your own judgement where they conflict.`
+
 // ------------------------------------------------- research + first draft
 
 const BriefSchema = z.object({
@@ -142,22 +155,22 @@ const MARKDOWN = `Blank line between paragraphs; a single newline is a line brea
 const EmailFields = {
   to: z.string().describe('Email of the single best recipient, or empty string if none has an address.'),
   subject: z.string(),
-  body: z
-    .string()
-    .describe(`The email body in markdown. ${MARKDOWN}`),
+  body: z.string().describe(`The email body in markdown. ${MARKDOWN}`),
 }
 
 const ResearchDraftSchema = z.object({
-  research_notes: z.string().describe('Everything useful you found, each fact with its source URL. Kept so the email can be rewritten later without searching again.'),
+  research_notes: z
+    .string()
+    .describe('Everything useful you found, each fact with its source URL. Kept so the email can be rewritten later without searching again.'),
   brief: BriefSchema,
   ...EmailFields,
 })
 
-const WRITING_RULES = `Write the email exactly as the user writes: follow their style notes, and treat the examples (Claude's draft vs. what they actually sent) as the strongest signal of their preferences. Use only facts from your research; never invent details, numbers, people or email addresses. Open with something specific to this organisation, make one clear ask drawn from the campaign notes, and keep it short enough to read on a phone. Address the best recipient by first name when you have one.`
+const WRITING_RULES = `Write the email exactly as the user writes: follow their style notes, and treat the examples (Claude's draft vs. what they actually sent) as the strongest signal of their preferences. Use only facts from your research; never invent details, numbers, people or email addresses. Open with something specific to this organisation, make one clear ask drawn from the campaign notes, and keep it short enough to read on a phone. Address the best recipient by first name when you have one. ${GUIDANCE_RULE}`
 
 const RESEARCH_SYSTEM = `You research an organisation and write the user a personalised first-contact email to it. The user's campaign notes say what they're reaching out about and what to look for.
 
-Research with WebSearch and WebFetch: what the organisation does; why they'd be a good fit for what the campaign asks for; recent, specific things that would open the email well; and the best people or inboxes to contact. A handful of searches and a few page reads is usually enough. Only give an email address if it's published or very strongly evidenced, and say how you know.
+Research with WebSearch and WebFetch: what the organisation does; why they'd be a good fit for what the campaign asks for; recent, specific things that would open the email well; and the best people or inboxes to contact. Use any instructions the user gave for this organisation in your research too (for example, who to write to or what to look into). A handful of searches and a few page reads is usually enough. Only give an email address if it's published or very strongly evidenced, and say how you know.
 
 ${WRITING_RULES}`
 
@@ -168,6 +181,7 @@ export async function researchAndDraft(apiKey: string | undefined, req: Research
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
       voiceSection(req.voice),
       `<sender>${req.senderName || 'the user'}</sender>`,
+      ...guidanceSections(req),
       `Organisation: ${req.company}${req.website ? ` (website: ${req.website})` : ''}`,
     ].join('\n\n')
     const result = await run(
@@ -208,6 +222,7 @@ export async function draft(apiKey: string | undefined, req: DraftRequest): Prom
       voiceSection(req.voice),
       `<sender>${req.senderName || 'the user'}</sender>`,
       `<organisation>${req.company}</organisation>`,
+      ...guidanceSections(req),
       `<research_notes>\n${req.research}\n</research_notes>`,
       req.previousDraft
         ? `Write a fresh version that takes a noticeably different angle from this previous draft:\n<previous_draft>\n${req.previousDraft}\n</previous_draft>`
@@ -229,7 +244,7 @@ export async function draft(apiKey: string | undefined, req: DraftRequest): Prom
 
 // -------------------------------------------------------------------- chat
 
-const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes and the user's voice.
+const CHAT_SYSTEM = `You help the user refine one outreach email. You can see the email, the research brief, the campaign notes, any email format and instructions for this organisation, and the user's voice. Keep the email within the format and instructions unless the user asks otherwise.
 
 The email body is markdown, exactly as stored: ${MARKDOWN} Links and formatting are part of the text you see and can change.
 
@@ -244,7 +259,10 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
       'propose_edit',
       'Suggest replacing a passage of the email. The user sees it as an accept/reject card.',
       {
-        old: z.string().min(1).describe('Exact text currently in the subject or body, copied verbatim, including any markdown such as [text](url) or **bold**.'),
+        old: z
+          .string()
+          .min(1)
+          .describe('Exact text currently in the subject or body, copied verbatim, including any markdown such as [text](url) or **bold**.'),
         new: z.string().min(1).describe('Replacement text, in the same markdown.'),
         reason: z.string().describe('A few words on why, shown to the user.'),
       },
@@ -261,6 +279,7 @@ export async function chat(apiKey: string | undefined, req: ChatRequest, emit: E
     const context = [
       `<campaign_notes>\n${req.campaignNotes || '(none)'}\n</campaign_notes>`,
       voiceSection(req.voice),
+      ...guidanceSections(req),
       req.brief ? `<brief organisation="${req.company}">\n${JSON.stringify(req.brief)}\n</brief>` : '',
       `<email>\nSubject: ${req.subject}\n\n${req.body}\n</email>`,
     ]
@@ -334,14 +353,19 @@ export async function learnVoice(apiKey: string | undefined, req: VoiceLearnRequ
 // Connector tools (Slack, email…) come from the user's Claude account and
 // can do anything, so only ones that look read-only by name are allowed.
 const READ_WORDS = /^(search|read|get|list|fetch|find|query|view|lookup|retrieve|describe|show|open)$/
-const WRITE_WORDS = /^(send|post|create|delete|update|write|reply|archive|upload|schedule|add|remove|set|draft|move|complete|uncomplete|rsvp|react|edit|invite|share|publish|forward|mark|manage|import|export|restart|call|run|bulk)$/
+const WRITE_WORDS =
+  /^(send|post|create|delete|update|write|reply|archive|upload|schedule|add|remove|set|draft|move|complete|uncomplete|rsvp|react|edit|invite|share|publish|forward|mark|manage|import|export|restart|call|run|bulk)$/
 export function isReadOnlyTool(name: string) {
   const words = name.toLowerCase().split(/[_\-\s]+/)
   return words.some((w) => READ_WORDS.test(w)) && !words.some((w) => WRITE_WORDS.test(w))
 }
 
 // "mcp__claude_ai_Slack__slack_search_public" → "Slack"
-const connectorName = (tool: string) => tool.split('__')[1]?.replace(/^claude_ai_/, '').replace(/_/g, ' ') ?? tool
+const connectorName = (tool: string) =>
+  tool
+    .split('__')[1]
+    ?.replace(/^claude_ai_/, '')
+    .replace(/_/g, ' ') ?? tool
 
 const EventSchema = z.object({
   details: z
@@ -410,6 +434,41 @@ export async function writingRules(apiKey: string | undefined, req: WritingRules
       }),
     )
     return { notes: parseOutput(RulesSchema, result.structured_output).notes.slice(0, 10) }
+  })
+}
+
+// ------------------------------------------------- adding organisations
+
+const OrganisationsSchema = z.object({
+  organisations: z.array(
+    z.object({
+      name: z.string().describe('The organisation’s name, as you’d search for it.'),
+      website: z.string().describe('Its website if the user gave one (domain or URL), otherwise "".'),
+      note: z.string().describe('Everything the user said that applies to this organisation, as a short instruction in their words. "" if nothing.'),
+    }),
+  ),
+})
+
+// Turns whatever the user typed ("Canva and Atlassian, both formal. PCBWay —
+// mention Campfire…") into a list of organisations with their own notes.
+export async function parseOrganisations(apiKey: string | undefined, text: string): Promise<Result<ParsedOrganisation[]>> {
+  return guard(async () => {
+    const result = await run(
+      `<text>\n${text}\n</text>`,
+      baseOptions(apiKey, {
+        // A quick extraction job; a smaller model is plenty.
+        model: 'haiku',
+        systemPrompt: `The user is listing organisations they want to email, in their own words. List each organisation once, in the order given.
+
+For each, keep any website they gave, and put everything they said about it in "note" as a short instruction in their words (e.g. "Mention they sponsored Campfire; ask for about 40 badges"). If something applies to several organisations ("both formal", "all of these are local"), add it to each one's note, reworded to stand alone ("Formal", not "Both formal"). Notes are instructions for writing or researching the email, so leave out the user's thinking aloud about whether to include one ("maybe", "not sure about this one"). A website alone isn't a note. Don't add anything they didn't say.`,
+        tools: [],
+        maxTurns: 3,
+        ...structured(OrganisationsSchema),
+      }),
+    )
+    return parseOutput(OrganisationsSchema, result.structured_output)
+      .organisations.map((o) => ({ name: o.name.trim(), website: o.website.trim(), note: o.note.trim() }))
+      .filter((o) => o.name)
   })
 }
 
